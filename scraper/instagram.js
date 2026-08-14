@@ -24,9 +24,6 @@ const EXECUTABLE_PATH = process.env.CHROMIUM_PATH || undefined;
 // Overridable so the pipeline can be tested against a local mock.
 const BASE_URL = process.env.IG_BASE_URL || 'https://www.instagram.com';
 
-// API endpoints whose JSON carries timeline media for a profile.
-const MEDIA_ENDPOINT_RE = /(web_profile_info|graphql\/query|graphql|\/feed\/user\/)/i;
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -102,6 +99,44 @@ function filenameFor(url) {
 function ensureExt(name, type) {
   if (/\.[a-zA-Z0-9]{2,4}$/.test(name)) return name;
   return name + (type === 'video' ? '.mp4' : '.jpg');
+}
+
+// Instagram server-renders the first page of posts as JSON inside
+// <script type="application/json"> tags. Parse those so small profiles (whose
+// posts never trigger an XHR) are still captured.
+async function harvestEmbedded(page, media, seen) {
+  const blobs = await page
+    .$$eval('script[type="application/json"]', (els) => els.map((e) => e.textContent))
+    .catch(() => []);
+  for (const blob of blobs) {
+    try {
+      extractMedia(JSON.parse(blob), media, seen);
+    } catch (_) {
+      /* not JSON media */
+    }
+  }
+}
+
+// Ask Instagram's own web API (from inside the logged-in page, so cookies and
+// headers are real) for the profile's first page of posts. The X-IG-App-ID
+// value is the long-stable public web app id.
+async function harvestWebProfileInfo(page, username, media, seen) {
+  const json = await page
+    .evaluate(async (user) => {
+      try {
+        const res = await fetch(
+          `/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`,
+          { headers: { 'X-IG-App-ID': '936619743392459' }, credentials: 'include' }
+        );
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_) {
+        return null;
+      }
+    }, username)
+    .catch(() => null);
+  if (json) extractMedia(json, media, seen);
+  return json;
 }
 
 // --- Login -----------------------------------------------------------------
@@ -181,6 +216,7 @@ async function backupProfile(opts) {
   const browser = await launch();
   const media = [];
   const seen = new Set();
+  let jsonResponses = 0;
 
   try {
     const contextOpts = {
@@ -198,10 +234,11 @@ async function backupProfile(opts) {
     // Intercept JSON responses that carry timeline media.
     page.on('response', async (response) => {
       try {
-        const url = response.url();
-        if (!MEDIA_ENDPOINT_RE.test(url)) return;
         const ct = (response.headers()['content-type'] || '').toLowerCase();
         if (!ct.includes('json')) return;
+        // Instagram renames its media endpoints often, so parse every JSON
+        // response and let the extractor decide what's media.
+        jsonResponses++;
         const json = await response.json().catch(() => null);
         if (!json) return;
         const before = media.length;
@@ -230,33 +267,58 @@ async function backupProfile(opts) {
       throw new Error(`Profile @${profile} not found.`);
     }
 
-    // A login wall usually means the profile is private or IG requires auth.
-    const needsLogin = await page
-      .locator('input[name="username"]')
-      .count()
-      .catch(() => 0);
-    if (needsLogin && !creds) {
+    await sleep(2500); // let the initial page settle
+
+    // A login wall means IG is refusing anonymous access (very common now) or
+    // the profile is private. Detect via a redirect to the login page or a
+    // visible login form.
+    const onLoginPage =
+      page.url().includes('/accounts/login') ||
+      (await page.locator('input[name="password"]').count().catch(() => 0)) > 0;
+    if (onLoginPage) {
       throw new Error(
-        'Instagram is asking to log in to view this profile. Try again with the optional login, or the profile may be private.'
+        creds
+          ? 'Instagram redirected to a login wall even after login — the session may have expired or been challenged. Try again.'
+          : 'Instagram is blocking anonymous access to this profile (a login wall appeared). Expand "Login" and provide your credentials, then try again.'
       );
     }
 
-    onLog('Scrolling the wall to load posts…');
-    // Scroll until the page stops growing (no more posts loading).
+    // 1) First page of posts embedded in the HTML.
+    await harvestEmbedded(page, media, seen);
+    // 2) First page via Instagram's own web API (robust to layout changes).
+    await harvestWebProfileInfo(page, profile, media, seen);
+    if (media.length) onProgress({ found: media.length });
+
+    onLog('Scrolling the wall to load the rest of the posts…');
+    // Scroll until no new media appears for several rounds; re-harvest embedded
+    // JSON each round as a fallback to the intercepted XHRs.
     let stableRounds = 0;
-    let lastCount = 0;
-    for (let i = 0; i < 400 && stableRounds < 4; i++) {
-      await page.mouse.wheel(0, 3000);
-      await sleep(1200);
+    let lastCount = media.length;
+    for (let i = 0; i < 400 && stableRounds < 5; i++) {
+      await page.mouse.wheel(0, 4000);
+      await sleep(1400);
+      await harvestEmbedded(page, media, seen);
       if (media.length === lastCount) {
         stableRounds++;
       } else {
         stableRounds = 0;
         lastCount = media.length;
+        onProgress({ found: media.length });
       }
     }
 
-    onLog(`Discovered ${media.length} media item(s). Downloading…`);
+    onLog(
+      `Saw ${jsonResponses} data response(s); discovered ${media.length} media item(s).`
+    );
+    if (media.length === 0) {
+      throw new Error(
+        (creds
+          ? 'Logged in, but no posts were found. '
+          : 'No posts were found (Instagram often requires login — expand "Login" and try again). ') +
+          'The account may be empty/private, or Instagram changed their page format.'
+      );
+    }
+    onLog('Downloading…');
 
     // Download each media file using the browser context (reuses cookies).
     let downloaded = 0;

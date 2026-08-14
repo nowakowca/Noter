@@ -332,6 +332,12 @@ a.item-name:hover {
   margin-bottom: 0.6rem;
 }
 
+.field-hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin: 0.3rem 0 0;
+}
+
 .login-note {
   color: var(--muted);
   font-size: 0.8rem;

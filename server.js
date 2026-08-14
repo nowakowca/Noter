@@ -121,14 +121,22 @@ app.delete('/api/items/:id', (req, res) => {
 let currentJob = null;
 
 function sanitizeProfile(name) {
-  return String(name || '')
-    .trim()
+  let s = String(name || '').trim();
+  // Accept a full profile URL, e.g. https://www.instagram.com/username/ .
+  const m = s.match(/instagram\.com\/([^/?#]+)/i);
+  if (m) s = m[1];
+  return s
     .replace(/^@/, '')
     .replace(/\/+$/, '')
     .toLowerCase();
 }
 
+const RESERVED_SEGMENTS = new Set([
+  'p', 'reel', 'reels', 'explore', 'accounts', 'stories', 'tv', 'direct',
+]);
+
 function isValidProfile(name) {
+  if (RESERVED_SEGMENTS.has(name)) return false;
   return /^[a-zA-Z0-9._]{1,40}$/.test(name);
 }
 

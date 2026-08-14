@@ -38,7 +38,8 @@ let pollTimer = null;
 // --- Scrape ----------------------------------------------------------------
 scrapeForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const profile = profileInput.value.trim().replace(/^@/, '');
+  // Send the raw input (full URL or username); the server extracts the handle.
+  const profile = profileInput.value.trim();
   if (!profile) return;
 
   const payload = { profile };
