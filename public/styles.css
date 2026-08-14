@@ -30,6 +30,31 @@ body {
   padding: 2.5rem 1.25rem 4rem;
 }
 
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.6rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--primary);
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -281,4 +306,144 @@ a.item-name:hover {
 
 .hidden {
   display: none !important;
+}
+
+/* --- Instagram backup ---------------------------------------------------- */
+#scrape-form {
+  margin-bottom: 1.25rem;
+}
+
+.login-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.85rem;
+  margin-bottom: 0.9rem;
+  background: var(--surface-2);
+}
+
+.login-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.login-details[open] summary {
+  margin-bottom: 0.6rem;
+}
+
+.login-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0 0 0.75rem;
+}
+
+.disclaimer {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin: 0.85rem 0 0;
+}
+
+.scrape-status {
+  margin-bottom: 1.5rem;
+}
+
+.status-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.status-label {
+  font-weight: 600;
+}
+
+.status-label.running {
+  color: var(--primary);
+}
+
+.status-label.done {
+  color: var(--success);
+}
+
+.status-label.error {
+  color: var(--danger);
+}
+
+.status-counts {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.status-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.gallery-profile {
+  margin-bottom: 1.75rem;
+}
+
+.gallery-profile h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.gallery-count {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.6rem;
+}
+
+.gallery-cell {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gallery-cell img,
+.gallery-cell video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gallery-download {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.gallery-download:hover {
+  background: rgba(0, 0, 0, 0.85);
 }

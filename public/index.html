@@ -8,6 +8,12 @@
   </head>
   <body>
     <div class="container">
+      <nav class="tabs">
+        <button class="tab active" data-view="notes">Notes</button>
+        <button class="tab" data-view="instagram">Instagram Backup</button>
+      </nav>
+
+      <section id="view-notes" class="view">
       <div class="list-toolbar">
         <div class="filters" role="tablist">
           <button class="filter active" data-filter="all">All</button>
@@ -45,8 +51,60 @@
 
       <ul id="items" class="items"></ul>
       <p id="empty-state" class="empty-state hidden">Nothing here yet — click + to add your first item.</p>
+      </section>
+
+      <section id="view-instagram" class="view hidden">
+        <form id="scrape-form" class="card" autocomplete="off">
+          <div class="field">
+            <label for="ig-profile">Instagram profile <span class="required">*</span></label>
+            <input type="text" id="ig-profile" placeholder="username (without @)" required />
+          </div>
+
+          <details class="login-details">
+            <summary>Login (optional — improves reliability, needed for private/large profiles)</summary>
+            <p class="login-note">
+              Used only for this run to authenticate the browser. Never stored in
+              plain text or logged. A session cookie is cached so you don't re-enter it.
+              Automating an account can get it flagged or banned by Instagram.
+            </p>
+            <div class="field">
+              <label for="ig-user">Your Instagram username</label>
+              <input type="text" id="ig-user" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="ig-pass">Password</label>
+              <input type="password" id="ig-pass" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label for="ig-2fa">2FA code (if enabled)</label>
+              <input type="text" id="ig-2fa" inputmode="numeric" placeholder="123456" />
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <button type="submit" id="scrape-btn" class="btn btn-primary">Back up profile</button>
+          </div>
+          <p class="disclaimer">
+            Backs up posts (photos, videos, carousels) from a public profile you're
+            entitled to save. Scraping is against Instagram's Terms of Service and can
+            break when Instagram changes their site.
+          </p>
+        </form>
+
+        <div id="scrape-status" class="card scrape-status hidden">
+          <div class="status-head">
+            <span id="status-label" class="status-label"></span>
+            <span id="status-counts" class="status-counts"></span>
+          </div>
+          <pre id="status-log" class="status-log"></pre>
+        </div>
+
+        <div id="gallery" class="gallery"></div>
+        <p id="ig-empty" class="empty-state hidden">No backups yet — enter a profile above.</p>
+      </section>
     </div>
 
     <script src="/app.js"></script>
+    <script src="/instagram.js"></script>
   </body>
 </html>
