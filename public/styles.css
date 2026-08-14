@@ -30,21 +30,6 @@ body {
   padding: 2.5rem 1.25rem 4rem;
 }
 
-.app-header {
-  text-align: center;
-  margin-bottom: 2rem;
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 2.25rem;
-}
-
-.subtitle {
-  margin: 0.25rem 0 0;
-  color: var(--muted);
-}
-
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -188,18 +173,16 @@ textarea:focus {
   gap: 0.7rem;
 }
 
+/* One line: checkbox · name (hyperlink) + description (wraps) · actions,
+   all vertically centered. */
 .item {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.85rem 1.1rem;
-}
-
-/* Line 1: checkbox · name (hyperlink) · actions */
-.item-row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 1.1rem;
 }
 
 .item-check {
@@ -231,9 +214,13 @@ textarea:focus {
   font-weight: 700;
 }
 
-.item-name {
+/* Name + description flow as inline text and wrap together when narrow. */
+.item-content {
   flex: 1;
   min-width: 0;
+}
+
+.item-name {
   font-weight: 600;
   color: var(--text);
   text-decoration: none;
@@ -245,13 +232,10 @@ a.item-name:hover {
   text-underline-offset: 2px;
 }
 
-/* Line 2: description */
 .item-description {
-  margin-top: 0.35rem;
-  padding-left: calc(20px + 0.75rem);
+  margin-left: 0.6rem;
   color: var(--muted);
   font-size: 0.9rem;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
