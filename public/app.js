@@ -7,6 +7,7 @@ const linkInput = document.getElementById('link');
 const descInput = document.getElementById('description');
 const submitBtn = document.getElementById('submit-btn');
 const cancelBtn = document.getElementById('cancel-btn');
+const addBtn = document.getElementById('add-btn');
 const listEl = document.getElementById('items');
 const emptyState = document.getElementById('empty-state');
 const counter = document.getElementById('counter');
@@ -64,28 +65,32 @@ function render() {
     li.className = 'item' + (item.completed ? ' completed' : '');
     li.dataset.id = item.id;
 
-    const linkHtml = item.link
-      ? `<a class="item-link" href="${escapeHtml(
+    // The name is the hyperlink when a link is present; otherwise plain text.
+    const nameHtml = item.link
+      ? `<a class="item-name" href="${escapeHtml(
           normalizeUrl(item.link)
         )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-          item.link
+          item.name
         )}</a>`
-      : '';
+      : `<span class="item-name">${escapeHtml(item.name)}</span>`;
     const descHtml = item.description
       ? `<div class="item-description">${escapeHtml(item.description)}</div>`
       : '';
 
     li.innerHTML = `
-      <input type="checkbox" class="item-check" ${item.completed ? 'checked' : ''} />
-      <div class="item-body">
-        <div class="item-name">${escapeHtml(item.name)}</div>
-        ${linkHtml}
-        ${descHtml}
+      <div class="item-row">
+        <input type="checkbox" class="item-check" ${item.completed ? 'checked' : ''} />
+        ${nameHtml}
+        <div class="item-actions">
+          <button class="icon-btn edit" title="Edit" aria-label="Edit">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+          <button class="icon-btn delete" title="Delete" aria-label="Delete">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="item-actions">
-        <button class="icon-btn edit" title="Edit">✏️</button>
-        <button class="icon-btn delete" title="Delete">🗑️</button>
-      </div>
+      ${descHtml}
     `;
 
     li.querySelector('.item-check').addEventListener('change', () =>
@@ -105,21 +110,28 @@ function render() {
   counter.textContent = `${remaining} active · ${items.length} total`;
 }
 
-// --- Actions -----------------------------------------------------------
-function resetForm() {
+// --- Form open / close --------------------------------------------------
+function openForm() {
+  form.classList.remove('hidden');
+  addBtn.setAttribute('aria-expanded', 'true');
+}
+
+function closeForm() {
   idInput.value = '';
   form.reset();
   submitBtn.textContent = 'Add item';
-  cancelBtn.classList.add('hidden');
+  form.classList.add('hidden');
+  addBtn.setAttribute('aria-expanded', 'false');
 }
 
+// --- Actions -----------------------------------------------------------
 function startEdit(item) {
   idInput.value = item.id;
   nameInput.value = item.name;
   linkInput.value = item.link;
   descInput.value = item.description;
   submitBtn.textContent = 'Save changes';
-  cancelBtn.classList.remove('hidden');
+  openForm();
   nameInput.focus();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -168,14 +180,27 @@ form.addEventListener('submit', async (e) => {
         body: JSON.stringify(payload),
       });
     }
-    resetForm();
+    closeForm();
     await loadItems();
   } catch (err) {
     alert(err.message);
   }
 });
 
-cancelBtn.addEventListener('click', resetForm);
+cancelBtn.addEventListener('click', closeForm);
+
+addBtn.addEventListener('click', () => {
+  const isOpen = addBtn.getAttribute('aria-expanded') === 'true';
+  const editing = Boolean(idInput.value);
+  // Toggle closed only when it's already open as a fresh "add" form.
+  if (isOpen && !editing) {
+    closeForm();
+  } else {
+    closeForm(); // clear any in-progress edit state first
+    openForm();
+    nameInput.focus();
+  }
+});
 
 filterBtns.forEach((btn) => {
   btn.addEventListener('click', () => {

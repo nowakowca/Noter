@@ -13,7 +13,22 @@
         <p class="subtitle">Keep track of things worth remembering.</p>
       </header>
 
-      <form id="item-form" class="card item-form" autocomplete="off">
+      <div class="list-toolbar">
+        <div class="filters" role="tablist">
+          <button class="filter active" data-filter="all">All</button>
+          <button class="filter" data-filter="active">Active</button>
+          <button class="filter" data-filter="completed">Completed</button>
+        </div>
+        <div class="toolbar-right">
+          <span id="counter" class="counter"></span>
+          <button type="button" id="add-btn" class="btn btn-primary add-btn" title="Add item" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>Add</span>
+          </button>
+        </div>
+      </div>
+
+      <form id="item-form" class="card item-form hidden" autocomplete="off">
         <input type="hidden" id="item-id" />
         <div class="field">
           <label for="name">Name <span class="required">*</span></label>
@@ -29,21 +44,12 @@
         </div>
         <div class="form-actions">
           <button type="submit" id="submit-btn" class="btn btn-primary">Add item</button>
-          <button type="button" id="cancel-btn" class="btn btn-ghost hidden">Cancel</button>
+          <button type="button" id="cancel-btn" class="btn btn-ghost">Cancel</button>
         </div>
       </form>
 
-      <div class="list-toolbar">
-        <div class="filters" role="tablist">
-          <button class="filter active" data-filter="all">All</button>
-          <button class="filter" data-filter="active">Active</button>
-          <button class="filter" data-filter="completed">Completed</button>
-        </div>
-        <span id="counter" class="counter"></span>
-      </div>
-
       <ul id="items" class="items"></ul>
-      <p id="empty-state" class="empty-state hidden">Nothing here yet — add your first item above.</p>
+      <p id="empty-state" class="empty-state hidden">Nothing here yet — click + to add your first item.</p>
     </div>
 
     <script src="/app.js"></script>
