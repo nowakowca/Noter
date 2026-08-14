@@ -1,4 +1,6 @@
 # --- Build stage: install dependencies (incl. native better-sqlite3) -------
+# Both stages use the SAME Node version so the compiled better-sqlite3 native
+# binary (tied to Node's ABI / NODE_MODULE_VERSION) loads at runtime.
 FROM node:20-bookworm-slim AS deps
 
 # better-sqlite3 ships prebuilt binaries, but keep build tools available as a
@@ -8,26 +10,30 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-# Browsers are provided by the Playwright runtime image below, so don't let the
-# playwright npm package download them here.
+# Don't download browsers here; the runtime stage installs Chromium itself.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY package.json ./
 RUN npm install --omit=dev
 
 # --- Runtime stage ---------------------------------------------------------
-# The Playwright image ships Chromium + all its OS dependencies. Its version
-# must match the "playwright" npm version in package.json (currently 1.62.1).
-FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS runtime
+FROM node:20-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json server.js db.js ./
 COPY scraper ./scraper
 COPY public ./public
+
+# Install Chromium and its OS dependencies for the Instagram backup feature.
+# `npx playwright install` pulls the browser build matching the installed
+# playwright npm version, so the two never drift apart.
+RUN npx playwright install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
 
 # Persist the SQLite database and downloaded media outside the image layers.
 RUN mkdir -p /app/data

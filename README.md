@@ -114,7 +114,7 @@ The frontend talks to a small REST API:
 - **Instagram backup:** Playwright (headless Chromium)
 - **Frontend:** vanilla HTML/CSS/JS (no build step)
 
-> The Docker image is based on the official `mcr.microsoft.com/playwright`
-> image so Chromium and its dependencies are included. The Playwright base
-> image tag in the `Dockerfile` must match the `playwright` version in
-> `package.json`.
+> The Docker image is built on `node:20` and installs Chromium via
+> `npx playwright install --with-deps chromium` at build time, so the browser
+> always matches the `playwright` npm version. Both build stages share the same
+> Node version so the native `better-sqlite3` binary loads at runtime.
