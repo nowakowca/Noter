@@ -1,0 +1,16 @@
+services:
+  noter:
+    build: .
+    image: noter
+    container_name: noter
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - DATA_DIR=/app/data
+    volumes:
+      - noter-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  noter-data:
