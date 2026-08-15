@@ -224,56 +224,84 @@ function sanitizeTitle(raw) {
   );
 }
 
-// Story highlights (the saved reels above the posts grid). Two API calls:
-// highlights_tray lists the reels, reels_media returns each reel's story items.
-// Discovered media are labelled so downloads are named per highlight.
-async function harvestHighlights(page, userId, media, seen, onLog, onProgress) {
-  const tray = await page
-    .evaluate(async (id) => {
+// Fetch JSON from Instagram inside the authenticated page, returning the HTTP
+// status too so callers can log what actually happened.
+async function apiFetch(page, url) {
+  return page
+    .evaluate(async (u) => {
       try {
-        const res = await fetch(`/api/v1/highlights/${id}/highlights_tray/`, {
+        const res = await fetch(u, {
           headers: { 'X-IG-App-ID': '936619743392459' },
           credentials: 'include',
         });
-        if (!res.ok) return null;
-        return await res.json();
-      } catch (_) {
-        return null;
+        let json = null;
+        try {
+          json = await res.json();
+        } catch (_) {
+          /* not JSON */
+        }
+        return { ok: res.ok, status: res.status, json };
+      } catch (e) {
+        return { ok: false, status: 0, json: null, error: String(e) };
       }
-    }, userId)
-    .catch(() => null);
+    }, url)
+    .catch(() => ({ ok: false, status: -1, json: null }));
+}
 
-  const reels = tray && Array.isArray(tray.tray) ? tray.tray : [];
+// Pull the list of highlight reels from whatever shape Instagram returns.
+function parseHighlightReels(json) {
+  if (!json) return [];
+  if (Array.isArray(json.tray)) return json.tray;
+  // GraphQL shape.
+  const edges = json.data?.user?.edge_highlight_reels?.edges;
+  if (Array.isArray(edges)) return edges.map((e) => e.node).filter(Boolean);
+  return [];
+}
+
+// Story highlights (the saved reels above the posts grid). highlights_tray lists
+// the reels; reels_media returns each reel's story items. Discovered media are
+// labelled so downloads are named per highlight.
+async function harvestHighlights(page, userId, media, seen, onLog, onProgress) {
+  const trayRes = await apiFetch(
+    page,
+    `/api/v1/highlights/${userId}/highlights_tray/`
+  );
+  onLog(
+    `highlights_tray: HTTP ${trayRes.status}` +
+      (trayRes.json ? `, keys: [${Object.keys(trayRes.json).join(', ')}]` : ', no JSON body')
+  );
+
+  const reels = parseHighlightReels(trayRes.json);
   if (!reels.length) {
-    onLog('No story highlights found.');
+    if (trayRes.json) {
+      // Show a short snippet so we can see the real shape when it's unexpected.
+      onLog(
+        'No highlights parsed from the response. Snippet: ' +
+          JSON.stringify(trayRes.json).slice(0, 400)
+      );
+    } else {
+      onLog('No story highlights returned (the endpoint may require login).');
+    }
     return;
   }
   onLog(`Found ${reels.length} highlight(s); fetching their media…`);
 
   let added = 0;
   for (const reel of reels) {
-    const reelId = reel.id; // e.g. "highlight:1789..."
+    // tray entries use ids like "highlight:1789…"; GraphQL nodes use a bare
+    // numeric id — normalise to the "highlight:<id>" form reels_media expects.
+    const rawId = reel.id != null ? reel.id : reel.pk;
+    const reelId = String(rawId).startsWith('highlight:')
+      ? String(rawId)
+      : `highlight:${rawId}`;
     const label = `highlight_${sanitizeTitle(reel.title)}`;
 
-    const data = await page
-      .evaluate(async (rid) => {
-        try {
-          const res = await fetch(
-            `/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(rid)}`,
-            { headers: { 'X-IG-App-ID': '936619743392459' }, credentials: 'include' }
-          );
-          if (!res.ok) return null;
-          return await res.json();
-        } catch (_) {
-          return null;
-        }
-      }, reelId)
-      .catch(() => null);
-
-    const items =
-      data && data.reels && data.reels[reelId] && Array.isArray(data.reels[reelId].items)
-        ? data.reels[reelId].items
-        : [];
+    const res = await apiFetch(
+      page,
+      `/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(reelId)}`
+    );
+    const reelData = res.json && res.json.reels ? res.json.reels[reelId] : null;
+    const items = reelData && Array.isArray(reelData.items) ? reelData.items : [];
 
     for (const item of items) {
       const hasVideo = Array.isArray(item.video_versions) && item.video_versions.length > 0;
