@@ -27,23 +27,27 @@ ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json server.js db.js zip.js ./
-COPY scraper ./scraper
-COPY public ./public
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Install Chromium and its OS dependencies for the Instagram backup feature, plus
-# gosu for dropping privileges to the target user. `npx playwright install` pulls
-# the browser build matching the installed playwright npm version.
+# Dependencies change rarely, so copy them first and do the expensive install
+# (Chromium download + its OS libraries + gosu) BEFORE the app source below.
+# That way editing server.js / public / scraper reuses this cached layer instead
+# of re-downloading Chromium on every build. `npx playwright install` pulls the
+# browser build matching the installed playwright npm version.
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
 RUN npx playwright install --with-deps chromium \
   && apt-get update \
   && apt-get install -y --no-install-recommends gosu \
-  && rm -rf /var/lib/apt/lists/* \
-  && chmod +x /usr/local/bin/docker-entrypoint.sh
+  && rm -rf /var/lib/apt/lists/*
 
-# Persist the SQLite database and downloaded media outside the image layers.
-RUN mkdir -p /app/data /app/media
+# Application source — changes often, so it lives AFTER the cached layer above.
+COPY server.js db.js zip.js ./
+COPY scraper ./scraper
+COPY public ./public
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+  && mkdir -p /app/data /app/media
+
 VOLUME ["/app/data"]
 
 EXPOSE 3000
