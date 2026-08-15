@@ -1,5 +1,8 @@
 'use strict';
 
+// Must run before anything opens a file (e.g. the SQLite database below).
+require('./drop-privileges');
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');

@@ -21,5 +21,7 @@ chown "$PUID:$PGID" "$MEDIA_DIR" 2>/dev/null || true
 # Chromium (Instagram backup) needs a writable HOME.
 export HOME=/tmp
 
-echo "Starting Noter as UID:GID ${PUID}:${PGID}"
-exec gosu "${PUID}:${PGID}" "$@"
+# Exec the app as root; it drops to PUID:PGID itself (see drop-privileges.js),
+# which avoids needing an external privilege-drop tool.
+echo "Starting Noter; will drop to UID:GID ${PUID}:${PGID}"
+exec "$@"

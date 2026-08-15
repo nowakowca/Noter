@@ -29,19 +29,18 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 # Dependencies change rarely, so copy them first and do the expensive install
-# (Chromium download + its OS libraries + gosu) BEFORE the app source below.
-# That way editing server.js / public / scraper reuses this cached layer instead
-# of re-downloading Chromium on every build. `npx playwright install` pulls the
-# browser build matching the installed playwright npm version.
+# (Chromium download + its OS libraries) BEFORE the app source below. That way
+# editing server.js / public / scraper reuses this cached layer instead of
+# re-downloading Chromium on every build. `npx playwright install` pulls the
+# browser build matching the installed playwright npm version. No extra apt
+# install is needed — the app drops privileges itself (see drop-privileges.js).
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 RUN npx playwright install --with-deps chromium \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends gosu \
   && rm -rf /var/lib/apt/lists/*
 
 # Application source — changes often, so it lives AFTER the cached layer above.
-COPY server.js db.js zip.js ./
+COPY server.js db.js zip.js drop-privileges.js ./
 COPY scraper ./scraper
 COPY public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
