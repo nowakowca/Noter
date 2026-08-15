@@ -161,6 +161,60 @@ async function harvestWebProfileInfo(page, username, media, seen) {
   return json;
 }
 
+// Paginate the whole timeline via Instagram's own feed API, from inside the
+// authenticated page. This is deterministic (cursor-based) and doesn't depend
+// on scrolling triggering lazy loads, which real profile pages often don't do
+// for an automated browser. Returns true if the API worked at all.
+async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) {
+  let maxId = '';
+  let pages = 0;
+  let anySuccess = false;
+
+  while (pages < 400) {
+    const result = await page
+      .evaluate(
+        async ({ id, cursor }) => {
+          try {
+            const qs = 'count=33' + (cursor ? '&max_id=' + encodeURIComponent(cursor) : '');
+            const res = await fetch(`/api/v1/feed/user/${id}/?${qs}`, {
+              headers: { 'X-IG-App-ID': '936619743392459' },
+              credentials: 'include',
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            return { ok: true, json: await res.json() };
+          } catch (e) {
+            return { ok: false, error: String(e) };
+          }
+        },
+        { id: userId, cursor: maxId }
+      )
+      .catch(() => ({ ok: false }));
+
+    if (!result || !result.ok || !result.json) {
+      if (!anySuccess) onLog('Timeline API unavailable; will fall back to scrolling.');
+      break;
+    }
+    anySuccess = true;
+    const json = result.json;
+    const before = media.length;
+    extractMedia(json, media, seen);
+    if (media.length > before) onProgress({ found: media.length });
+    pages++;
+
+    if (json.more_available && json.next_max_id) {
+      maxId = json.next_max_id;
+      await sleep(700); // be gentle between pages
+    } else {
+      break;
+    }
+  }
+
+  if (anySuccess) {
+    onLog(`Timeline API: fetched ${pages} page(s), ${media.length} media item(s).`);
+  }
+  return anySuccess;
+}
+
 // --- Login -----------------------------------------------------------------
 async function performLogin(context, page, creds, log) {
   log('Logging in…');
@@ -314,9 +368,10 @@ async function backupProfile(opts) {
     // The profile's total post count (carousels count as one post), useful as a
     // reference against how many media items we end up finding.
     let totalPosts = null;
+    let userId = null;
     try {
-      totalPosts =
-        profileInfo.data.user.edge_owner_to_timeline_media.count;
+      totalPosts = profileInfo.data.user.edge_owner_to_timeline_media.count;
+      userId = profileInfo.data.user.id;
     } catch (_) {
       /* not available */
     }
@@ -326,6 +381,16 @@ async function backupProfile(opts) {
       );
     }
 
+    // Primary method: paginate the whole timeline through Instagram's feed API.
+    let apiWorked = false;
+    if (userId) {
+      onLog('Fetching all posts via the timeline API…');
+      apiWorked = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
+    }
+
+    // Fall back to scrolling only if the API didn't work — scrolling a real
+    // profile often fails to trigger Instagram's own pagination.
+    if (!apiWorked) {
     onLog('Scrolling the wall to load the rest of the posts…');
     // Stop only when BOTH the media count and the page height stay unchanged for
     // SCROLL_PATIENCE consecutive rounds — a plateau in the count alone can just
@@ -376,18 +441,20 @@ async function backupProfile(opts) {
       if (stableRounds >= SCROLL_PATIENCE) break;
     }
     if (i >= MAX_SCROLLS) stopReason = `hit the scroll cap (${MAX_SCROLLS})`;
-    onLog(`Stopped scrolling after ${i} round(s) — ${stopReason}.`);
+    onLog(`Stopped scrolling after ${i} round(s) — ${stopReason}. Saw ${jsonResponses} data response(s).`);
+    }
 
     onLog(
-      `Saw ${jsonResponses} data response(s); discovered ${media.length} media item(s)` +
+      `Discovered ${media.length} media item(s)` +
         (totalPosts != null ? ` from a profile of ${totalPosts} post(s)` : '') +
         '.'
     );
     if (totalPosts != null && media.length < totalPosts) {
       onLog(
-        'Fewer media than posts — pagination may have stopped early. Try raising ' +
-          'IG_SCROLL_PATIENCE / IG_SCROLL_DELAY, or the profile has content this ' +
-          "tool doesn't fetch (e.g. tagged posts)."
+        'Fewer media than posts — the API or scroll may have stopped early, or the ' +
+          "profile has content this tool doesn't fetch (e.g. tagged posts, or " +
+          'posts hidden by Instagram). Raising IG_SCROLL_PATIENCE / IG_SCROLL_DELAY ' +
+          'can help if it fell back to scrolling.'
       );
     }
     if (media.length === 0) {

@@ -122,14 +122,20 @@ variable).
 
 ### Not all posts downloaded?
 
-Instagram loads posts lazily as you scroll, so very large profiles or slow
-connections can stop short. The backup status log helps you see what happened —
-it reports the profile's total post count, a running discovery count per scroll,
-why scrolling stopped, and a final `discovered N of M posts` line. If it stopped
-early, raise `IG_SCROLL_PATIENCE` (e.g. `20`) and/or `IG_SCROLL_DELAY` (e.g.
-`3500`) and run it again. Note that a carousel counts as one *post* but yields
-several *media* files, so the media count can legitimately exceed the post
-count.
+Posts are fetched primarily by paginating Instagram's own timeline API
+(cursor-based), which walks every page deterministically — the status log shows
+`Timeline API: fetched N page(s)`. If that API is unavailable, it falls back to
+scrolling the page, which is less reliable (the `IG_SCROLL_*` knobs above tune
+it).
+
+The status log reports the profile's total post count and a final
+`Discovered N of M posts` line. If it comes up short:
+
+- A **carousel counts as one post but yields several media files**, so the media
+  count can legitimately *exceed* the post count.
+- If it fell back to scrolling and stopped early, raise `IG_SCROLL_PATIENCE`
+  (e.g. `20`) and/or `IG_SCROLL_DELAY` (e.g. `3500`).
+- Tagged posts and content Instagram hides from the timeline are not fetched.
 
 ### File ownership (Docker)
 
