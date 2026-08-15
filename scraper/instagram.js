@@ -171,27 +171,23 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   let anySuccess = false;
 
   while (pages < 400) {
-    const result = await page
-      .evaluate(
-        async ({ id, cursor }) => {
-          try {
-            const qs = 'count=33' + (cursor ? '&max_id=' + encodeURIComponent(cursor) : '');
-            const res = await fetch(`/api/v1/feed/user/${id}/?${qs}`, {
-              headers: { 'X-IG-App-ID': '936619743392459' },
-              credentials: 'include',
-            });
-            if (!res.ok) return { ok: false, status: res.status };
-            return { ok: true, json: await res.json() };
-          } catch (e) {
-            return { ok: false, error: String(e) };
-          }
-        },
-        { id: userId, cursor: maxId }
-      )
-      .catch(() => ({ ok: false }));
+    const qs = 'count=33' + (maxId ? '&max_id=' + encodeURIComponent(maxId) : '');
+    const url = `/api/v1/feed/user/${userId}/?${qs}`;
 
-    if (!result || !result.ok || !result.json) {
-      if (!anySuccess) onLog('Timeline API unavailable; will fall back to scrolling.');
+    let result = await apiFetch(page, url);
+    // Retry once after a pause if Instagram rate-limits.
+    if (!result.ok && (result.status === 429 || result.status === 403)) {
+      onLog(`Timeline API returned HTTP ${result.status} (rate limit) — waiting 15s and retrying…`);
+      await sleep(15000);
+      result = await apiFetch(page, url);
+    }
+
+    if (!result.ok || !result.json) {
+      if (!anySuccess) {
+        onLog(
+          `Timeline API unavailable (HTTP ${result.status}); will fall back to scrolling.`
+        );
+      }
       break;
     }
     anySuccess = true;
