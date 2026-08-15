@@ -26,14 +26,23 @@ one at a time.
 As the page loads, Instagram's own JSON API responses are intercepted; those
 contain the direct full-resolution image and `.mp4` video URLs, which are then
 downloaded straight to disk. This gives browser-level realism *and* clean,
-playable video files. Downloads land in `DATA_DIR/instagram/<profile>/` and are
-browsable in a gallery.
+playable video files.
+
+**Enter a profile** as a full link (`https://www.instagram.com/username/`) or a
+bare username. Files are saved as `<username>_<N>.jpg` / `.mp4` in a per-profile
+folder inside `MEDIA_DIR` (see [Configuration](#configuration)). Re-running a
+backup keeps the existing numbering and only downloads new posts.
+
+**Gallery:** each profile is a collapsible section. Tick the checkboxes on
+individual items to **download** the selection (as a single `.zip`) or **delete**
+them; use *Select all* to act on the whole profile at once.
 
 **Optional login:** you can expand the *Login* section to supply your own
 Instagram credentials (and a 2FA code) for more reliable / larger downloads. The
 password is used only for that run — it is never logged or stored in plain text.
-A session cookie is cached under `DATA_DIR/instagram/.sessions/` so you don't
-re-enter it. Anonymous mode (no login) also works for public profiles.
+A session cookie is cached under `DATA_DIR/ig-sessions/` so you don't re-enter
+it. Anonymous mode (no login) also works for public profiles — though Instagram
+increasingly requires login to view profile media.
 
 > **Please note**
 > - Automated access is against Instagram's [Terms of Service](https://help.instagram.com/581066165581870); an account used for login can be flagged or banned.
@@ -59,13 +68,28 @@ docker compose up --build
 
 Then open <http://localhost:3000>.
 
-Your notes are stored in the `noter-data` volume and survive restarts.
+App state (notes database, saved login sessions) lives in the `noter-data`
+volume. Backed-up **media** is written to `./backups` by default.
+
+### Saving backups to a custom folder
+
+Point the media at any host directory by setting `MEDIA_PATH` — either in a
+`.env` file next to `docker-compose.yml` (copy `.env.example`) or inline:
+
+```bash
+MEDIA_PATH=/home/me/Pictures/instagram docker compose up --build
+```
+
+Backups then land in `/home/me/Pictures/instagram/<username>/`.
 
 ## Quick start (Docker)
 
 ```bash
 docker build -t noter .
-docker run -d --name noter -p 3000:3000 -v noter-data:/app/data noter
+docker run -d --name noter -p 3000:3000 \
+  -v noter-data:/app/data \
+  -v /home/me/Pictures/instagram:/app/media \
+  noter
 ```
 
 ## Running locally without Docker
@@ -88,8 +112,13 @@ variable).
 | Variable        | Default                  | Description                                              |
 | --------------- | ------------------------ | ------------------------------------------------------- |
 | `PORT`          | `3000`                   | Port the HTTP server listens on                         |
-| `DATA_DIR`      | `./data`                 | Directory for the SQLite database and downloaded media  |
+| `DATA_DIR`      | `./data`                 | SQLite database and saved login sessions                |
+| `MEDIA_DIR`     | `${DATA_DIR}/instagram`  | Where downloaded media is written (per-profile folders) |
 | `CHROMIUM_PATH` | *(Playwright default)*   | Override the Chromium binary used for backups           |
+
+> In Docker, `MEDIA_DIR` is `/app/media` and is bind-mounted from the host
+> `MEDIA_PATH` (default `./backups`). See
+> [Saving backups to a custom folder](#saving-backups-to-a-custom-folder).
 
 ## API
 
@@ -105,6 +134,8 @@ The frontend talks to a small REST API:
 | `POST`   | `/api/scrape`     | Start an Instagram backup            |
 | `GET`    | `/api/scrape/status` | Progress of the running backup    |
 | `GET`    | `/api/backups`    | List downloaded profiles and files   |
+| `POST`   | `/api/backups/:profile/download` | Zip up selected files     |
+| `POST`   | `/api/backups/:profile/delete`   | Delete selected files     |
 | `GET`    | `/healthz`        | Health check                         |
 
 ## Tech stack

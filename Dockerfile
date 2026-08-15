@@ -21,6 +21,7 @@ FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=/app/data \
+    MEDIA_DIR=/app/media \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
@@ -36,7 +37,7 @@ RUN npx playwright install --with-deps chromium \
   && rm -rf /var/lib/apt/lists/*
 
 # Persist the SQLite database and downloaded media outside the image layers.
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/media
 VOLUME ["/app/data"]
 
 EXPOSE 3000

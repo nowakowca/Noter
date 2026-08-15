@@ -101,6 +101,22 @@ function ensureExt(name, type) {
   return name + (type === 'video' ? '.mp4' : '.jpg');
 }
 
+// A stable identifier for a media item across runs: the CDN path basename
+// (before the query string) contains a content hash that stays constant even
+// though the signed URL's query parameters change on every page load.
+function mediaKey(url) {
+  const clean = url.split('?')[0].split('#')[0];
+  return path.basename(clean) || url;
+}
+
+// Pick a file extension from the URL, falling back by media type.
+function extFor(url, type) {
+  const clean = url.split('?')[0].split('#')[0];
+  const m = path.basename(clean).match(/\.([a-zA-Z0-9]{2,4})$/);
+  if (m) return m[1].toLowerCase();
+  return type === 'video' ? 'mp4' : 'jpg';
+}
+
 // Instagram server-renders the first page of posts as JSON inside
 // <script type="application/json"> tags. Parse those so small profiles (whose
 // posts never trigger an XHR) are still captured.
@@ -320,27 +336,47 @@ async function backupProfile(opts) {
     }
     onLog('Downloading…');
 
-    // Download each media file using the browser context (reuses cookies).
-    let downloaded = 0;
-    const usedNames = new Set();
-    for (const item of media) {
-      let name = ensureExt(filenameFor(item.url), item.type);
-      while (usedNames.has(name)) name = `_${name}`;
-      usedNames.add(name);
-      const dest = path.join(outputDir, name);
+    // Files are named "<username>_<N>.<ext>". A manifest maps each media's
+    // stable key (its CDN path basename, which contains a content hash) to the
+    // assigned filename, so re-running a backup keeps existing numbering and
+    // only downloads new posts.
+    const manifestPath = path.join(outputDir, '.manifest.json');
+    let manifest = {};
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch (_) {
+      manifest = {};
+    }
+    // Continue numbering after the highest N already assigned.
+    let nextIndex = 0;
+    for (const assigned of Object.values(manifest)) {
+      const m = String(assigned).match(/_(\d+)\.[^.]+$/);
+      if (m) nextIndex = Math.max(nextIndex, Number(m[1]));
+    }
 
-      if (fs.existsSync(dest)) {
+    let downloaded = 0;
+    for (const item of media) {
+      const key = mediaKey(item.url);
+
+      // Already downloaded in a previous run?
+      if (manifest[key] && fs.existsSync(path.join(outputDir, manifest[key]))) {
         downloaded++;
         onProgress({ found: media.length, downloaded });
         continue;
       }
 
+      const ext = extFor(item.url, item.type);
+      const candidate = `${profile}_${nextIndex + 1}.${ext}`;
+      const dest = path.join(outputDir, candidate);
+
       try {
         const res = await context.request.get(item.url, { timeout: 60000 });
         if (res.ok()) {
-          const buf = await res.body();
-          fs.writeFileSync(dest, buf);
+          fs.writeFileSync(dest, await res.body());
+          nextIndex += 1;
+          manifest[key] = candidate;
           downloaded++;
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest));
         }
       } catch (_) {
         /* skip a file that fails to download */
@@ -355,4 +391,4 @@ async function backupProfile(opts) {
   }
 }
 
-module.exports = { backupProfile, extractMedia, filenameFor, ensureExt };
+module.exports = { backupProfile, extractMedia, filenameFor, ensureExt, mediaKey, extFor };

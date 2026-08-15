@@ -141,32 +141,133 @@ function renderGallery(backups) {
 
   for (const backup of backups) {
     if (backup.count === 0) continue;
-    const section = document.createElement('div');
-    section.className = 'gallery-profile';
-    section.innerHTML = `<h3>@${escapeHtmlIg(backup.profile)} <span class="gallery-count">${backup.count} item(s)</span></h3>`;
+    gallery.appendChild(buildProfileSection(backup));
+  }
+}
 
-    const grid = document.createElement('div');
-    grid.className = 'gallery-grid';
+// A collapsible <details> section per profile, with per-item checkboxes and a
+// bulk action toolbar (select all / download / delete).
+function buildProfileSection(backup) {
+  const details = document.createElement('details');
+  details.className = 'gallery-profile';
+  details.open = true;
 
-    for (const file of backup.files) {
-      const cell = document.createElement('div');
-      cell.className = 'gallery-cell';
-      if (file.type === 'video') {
-        cell.innerHTML = `<video src="${file.url}" controls preload="metadata"></video>`;
-      } else {
-        cell.innerHTML = `<a href="${file.url}" target="_blank" rel="noopener"><img src="${file.url}" loading="lazy" alt="" /></a>`;
+  const summary = document.createElement('summary');
+  summary.innerHTML = `@${escapeHtmlIg(backup.profile)} <span class="gallery-count">${backup.count} item(s)</span>`;
+  details.appendChild(summary);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'gallery-toolbar';
+  toolbar.innerHTML = `
+    <label class="select-all"><input type="checkbox" class="sel-all" /> Select all</label>
+    <span class="sel-count"></span>
+    <span class="toolbar-spacer"></span>
+    <button type="button" class="btn btn-ghost btn-sm act-download" disabled>↓ Download</button>
+    <button type="button" class="btn btn-ghost btn-sm act-delete" disabled>🗑 Delete</button>
+  `;
+  details.appendChild(toolbar);
+
+  const grid = document.createElement('div');
+  grid.className = 'gallery-grid';
+  details.appendChild(grid);
+
+  const checkboxes = [];
+  for (const file of backup.files) {
+    const cell = document.createElement('div');
+    cell.className = 'gallery-cell';
+
+    const media =
+      file.type === 'video'
+        ? `<video src="${file.url}" controls preload="metadata"></video>`
+        : `<a href="${file.url}" target="_blank" rel="noopener"><img src="${file.url}" loading="lazy" alt="" /></a>`;
+
+    cell.innerHTML = `
+      <label class="cell-check"><input type="checkbox" data-name="${escapeHtmlIg(file.name)}" /></label>
+      ${media}
+      <a class="gallery-download" href="${file.url}" download="${escapeHtmlIg(file.name)}">↓ Save</a>
+    `;
+    grid.appendChild(cell);
+    checkboxes.push(cell.querySelector('input[type="checkbox"]'));
+  }
+
+  // Wire up selection + bulk actions for this section.
+  const selAll = toolbar.querySelector('.sel-all');
+  const selCount = toolbar.querySelector('.sel-count');
+  const btnDownload = toolbar.querySelector('.act-download');
+  const btnDelete = toolbar.querySelector('.act-delete');
+
+  const selectedNames = () =>
+    checkboxes.filter((c) => c.checked).map((c) => c.dataset.name);
+
+  const refresh = () => {
+    const n = selectedNames().length;
+    selCount.textContent = n ? `${n} selected` : '';
+    btnDownload.disabled = n === 0;
+    btnDelete.disabled = n === 0;
+    selAll.checked = n > 0 && n === checkboxes.length;
+    selAll.indeterminate = n > 0 && n < checkboxes.length;
+  };
+
+  checkboxes.forEach((c) => c.addEventListener('change', refresh));
+  selAll.addEventListener('change', () => {
+    checkboxes.forEach((c) => (c.checked = selAll.checked));
+    refresh();
+  });
+  btnDownload.addEventListener('click', () =>
+    downloadSelected(backup.profile, selectedNames())
+  );
+  btnDelete.addEventListener('click', () =>
+    deleteSelected(backup.profile, selectedNames())
+  );
+  // Keep the summary from toggling when clicking the toolbar.
+  toolbar.addEventListener('click', (e) => e.stopPropagation());
+
+  refresh();
+  return details;
+}
+
+async function downloadSelected(profile, names) {
+  if (!names.length) return;
+  try {
+    const res = await fetch(
+      `/api/backups/${encodeURIComponent(profile)}/download`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: names }),
       }
-      const dl = document.createElement('a');
-      dl.href = file.url;
-      dl.download = file.name;
-      dl.className = 'gallery-download';
-      dl.textContent = '↓ Save';
-      cell.appendChild(dl);
-      grid.appendChild(cell);
-    }
+    );
+    if (!res.ok) throw new Error('Download failed.');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${profile}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(err.message);
+  }
+}
 
-    section.appendChild(grid);
-    gallery.appendChild(section);
+async function deleteSelected(profile, names) {
+  if (!names.length) return;
+  if (!confirm(`Delete ${names.length} item(s) from @${profile}?`)) return;
+  try {
+    const res = await fetch(
+      `/api/backups/${encodeURIComponent(profile)}/delete`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: names }),
+      }
+    );
+    if (!res.ok) throw new Error('Delete failed.');
+    await loadBackups();
+  } catch (err) {
+    alert(err.message);
   }
 }
 

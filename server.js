@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
+const { writeZip } = require('./zip');
 const db = require('./db');
 const { backupProfile } = require('./scraper/instagram');
 
@@ -10,15 +11,19 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const INSTAGRAM_DIR = path.join(DATA_DIR, 'instagram');
-// Session cookies live in a dotfile dir so express.static (dotfiles: 'ignore')
-// never serves them over /media.
-const SESSION_DIR = path.join(INSTAGRAM_DIR, '.sessions');
+// Downloaded media can live in a separate directory (e.g. a bind-mounted host
+// path), configurable via MEDIA_DIR. Defaults to DATA_DIR/instagram.
+const MEDIA_DIR = process.env.MEDIA_DIR || path.join(DATA_DIR, 'instagram');
+// Session cookies stay under DATA_DIR (app state), never inside MEDIA_DIR, so
+// they are never exposed via /media.
+const SESSION_DIR = path.join(DATA_DIR, 'ig-sessions');
+
+fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-// Serve downloaded media (dotfiles, incl. .sessions, are ignored by default).
-app.use('/media', express.static(INSTAGRAM_DIR));
+// Serve downloaded media (dotfiles, e.g. .manifest.json, are ignored).
+app.use('/media', express.static(MEDIA_DIR));
 
 // --- Prepared statements ---------------------------------------------------
 const stmts = {
@@ -194,7 +199,7 @@ app.post('/api/scrape', (req, res) => {
     if (job.log.length > 200) job.log.shift();
   };
 
-  const outputDir = path.join(INSTAGRAM_DIR, profile);
+  const outputDir = path.join(MEDIA_DIR, profile);
 
   backupProfile({
     profile,
@@ -230,25 +235,113 @@ app.get('/api/scrape/status', (req, res) => {
 
 // List downloaded backups and their media files.
 app.get('/api/backups', (req, res) => {
-  if (!fs.existsSync(INSTAGRAM_DIR)) return res.json([]);
+  if (!fs.existsSync(MEDIA_DIR)) return res.json([]);
   const entries = fs
-    .readdirSync(INSTAGRAM_DIR, { withFileTypes: true })
+    .readdirSync(MEDIA_DIR, { withFileTypes: true })
     .filter((d) => d.isDirectory() && !d.name.startsWith('.'));
 
   const backups = entries.map((dir) => {
-    const files = fs
-      .readdirSync(path.join(INSTAGRAM_DIR, dir.name))
-      .filter((f) => !f.startsWith('.'))
-      .map((f) => ({
-        name: f,
-        url: `/media/${encodeURIComponent(dir.name)}/${encodeURIComponent(f)}`,
-        type: /\.(mp4|mov|webm)$/i.test(f) ? 'video' : 'image',
-      }));
+    const files = listMediaFiles(dir.name).map((f) => ({
+      name: f,
+      url: `/media/${encodeURIComponent(dir.name)}/${encodeURIComponent(f)}`,
+      type: /\.(mp4|mov|webm)$/i.test(f) ? 'video' : 'image',
+    }));
     return { profile: dir.name, count: files.length, files };
   });
 
   backups.sort((a, b) => a.profile.localeCompare(b.profile));
   res.json(backups);
+});
+
+// --- Bulk operations on a profile's media ----------------------------------
+const SAFE_FILE_RE = /^[a-zA-Z0-9._-]+$/;
+
+function listMediaFiles(profile) {
+  const dir = path.join(MEDIA_DIR, profile);
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => !f.startsWith('.'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+// Resolve requested filenames to real, safe files inside the profile dir.
+function resolveRequestedFiles(profile, requested) {
+  const dir = path.join(MEDIA_DIR, profile);
+  const existing = new Set(listMediaFiles(profile));
+  const names = Array.isArray(requested) ? requested : [];
+  return names
+    .filter((f) => typeof f === 'string' && SAFE_FILE_RE.test(f) && !f.startsWith('.'))
+    .filter((f) => existing.has(f))
+    .map((f) => ({ name: f, full: path.join(dir, f) }));
+}
+
+// Download selected files as a single zip.
+app.post('/api/backups/:profile/download', (req, res) => {
+  const profile = sanitizeProfile(req.params.profile);
+  if (!isValidProfile(profile)) {
+    return res.status(400).json({ error: 'Invalid profile.' });
+  }
+  const files = resolveRequestedFiles(profile, req.body.files);
+  if (files.length === 0) {
+    return res.status(400).json({ error: 'No matching files selected.' });
+  }
+
+  res.attachment(`${profile}.zip`);
+  res.type('application/zip');
+  try {
+    writeZip(res, files);
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to build zip.' });
+    else res.end();
+  }
+});
+
+// Delete selected files (and prune the manifest).
+app.post('/api/backups/:profile/delete', (req, res) => {
+  const profile = sanitizeProfile(req.params.profile);
+  if (!isValidProfile(profile)) {
+    return res.status(400).json({ error: 'Invalid profile.' });
+  }
+  const files = resolveRequestedFiles(profile, req.body.files);
+  const dir = path.join(MEDIA_DIR, profile);
+
+  let deleted = 0;
+  const removedNames = new Set();
+  for (const f of files) {
+    try {
+      fs.unlinkSync(f.full);
+      removedNames.add(f.name);
+      deleted++;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  // Prune deleted entries from the manifest so re-runs don't think we have them.
+  const manifestPath = path.join(dir, '.manifest.json');
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    let changed = false;
+    for (const key of Object.keys(manifest)) {
+      if (removedNames.has(manifest[key])) {
+        delete manifest[key];
+        changed = true;
+      }
+    }
+    if (changed) fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  } catch (_) {
+    /* no manifest */
+  }
+
+  // Remove the now-empty profile directory.
+  if (listMediaFiles(profile).length === 0) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+
+  res.json({ deleted });
 });
 
 app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
