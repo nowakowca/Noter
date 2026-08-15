@@ -203,15 +203,12 @@ app.post('/api/scrape', (req, res) => {
   };
 
   const outputDir = path.join(MEDIA_DIR, profile);
-  // Default to including highlights unless explicitly disabled.
-  const includeHighlights = req.body.highlights !== false;
 
   backupProfile({
     profile,
     creds,
     outputDir,
     sessionDir: SESSION_DIR,
-    includeHighlights,
     onLog: log,
     onProgress: ({ found, downloaded }) => {
       if (typeof found === 'number') job.found = found;

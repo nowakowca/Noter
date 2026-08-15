@@ -169,27 +169,29 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   let maxId = '';
   let pages = 0;
   let anySuccess = false;
-  let lastStatus = null;
 
   while (pages < 400) {
-    const qs = 'count=33' + (maxId ? '&max_id=' + encodeURIComponent(maxId) : '');
-    const url = `/api/v1/feed/user/${userId}/?${qs}`;
+    const result = await page
+      .evaluate(
+        async ({ id, cursor }) => {
+          try {
+            const qs = 'count=33' + (cursor ? '&max_id=' + encodeURIComponent(cursor) : '');
+            const res = await fetch(`/api/v1/feed/user/${id}/?${qs}`, {
+              headers: { 'X-IG-App-ID': '936619743392459' },
+              credentials: 'include',
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            return { ok: true, json: await res.json() };
+          } catch (e) {
+            return { ok: false, error: String(e) };
+          }
+        },
+        { id: userId, cursor: maxId }
+      )
+      .catch(() => ({ ok: false }));
 
-    let result = await apiFetch(page, url);
-    // Retry once after a pause if Instagram rate-limits.
-    if (!result.ok && result.status === 429) {
-      onLog(`Timeline API returned HTTP ${result.status} (rate limit) — waiting 15s and retrying…`);
-      await sleep(15000);
-      result = await apiFetch(page, url);
-    }
-    lastStatus = result.status;
-
-    if (!result.ok || !result.json) {
-      if (!anySuccess) {
-        onLog(
-          `Timeline API unavailable (HTTP ${result.status}); will fall back to scrolling.`
-        );
-      }
+    if (!result || !result.ok || !result.json) {
+      if (!anySuccess) onLog('Timeline API unavailable; will fall back to scrolling.');
       break;
     }
     anySuccess = true;
@@ -210,121 +212,7 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   if (anySuccess) {
     onLog(`Timeline API: fetched ${pages} page(s), ${media.length} media item(s).`);
   }
-  return { anySuccess, lastStatus };
-}
-
-function sanitizeTitle(raw) {
-  return (
-    String(raw || '')
-      .replace(/[^a-zA-Z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 40) || 'untitled'
-  );
-}
-
-// Fetch JSON from Instagram inside the authenticated page, returning the HTTP
-// status too so callers can log what actually happened.
-async function apiFetch(page, url) {
-  return page
-    .evaluate(async (u) => {
-      try {
-        const res = await fetch(u, {
-          headers: { 'X-IG-App-ID': '936619743392459' },
-          credentials: 'include',
-        });
-        let json = null;
-        try {
-          json = await res.json();
-        } catch (_) {
-          /* not JSON */
-        }
-        return { ok: res.ok, status: res.status, json };
-      } catch (e) {
-        return { ok: false, status: 0, json: null, error: String(e) };
-      }
-    }, url)
-    .catch(() => ({ ok: false, status: -1, json: null }));
-}
-
-// Pull the list of highlight reels from whatever shape Instagram returns.
-function parseHighlightReels(json) {
-  if (!json) return [];
-  if (Array.isArray(json.tray)) return json.tray;
-  // GraphQL shape.
-  const edges = json.data?.user?.edge_highlight_reels?.edges;
-  if (Array.isArray(edges)) return edges.map((e) => e.node).filter(Boolean);
-  return [];
-}
-
-// Story highlights (the saved reels above the posts grid). highlights_tray lists
-// the reels; reels_media returns each reel's story items. Discovered media are
-// labelled so downloads are named per highlight.
-async function harvestHighlights(page, userId, media, seen, onLog, onProgress) {
-  const trayRes = await apiFetch(
-    page,
-    `/api/v1/highlights/${userId}/highlights_tray/`
-  );
-  onLog(
-    `highlights_tray: HTTP ${trayRes.status}` +
-      (trayRes.json ? `, keys: [${Object.keys(trayRes.json).join(', ')}]` : ', no JSON body')
-  );
-
-  const reels = parseHighlightReels(trayRes.json);
-  if (!reels.length) {
-    if (trayRes.json) {
-      // Show a short snippet so we can see the real shape when it's unexpected.
-      onLog(
-        'No highlights parsed from the response. Snippet: ' +
-          JSON.stringify(trayRes.json).slice(0, 400)
-      );
-    } else {
-      onLog('No story highlights returned (the endpoint may require login).');
-    }
-    return;
-  }
-  onLog(`Found ${reels.length} highlight(s); fetching their media…`);
-
-  let added = 0;
-  for (const reel of reels) {
-    // tray entries use ids like "highlight:1789…"; GraphQL nodes use a bare
-    // numeric id — normalise to the "highlight:<id>" form reels_media expects.
-    const rawId = reel.id != null ? reel.id : reel.pk;
-    const reelId = String(rawId).startsWith('highlight:')
-      ? String(rawId)
-      : `highlight:${rawId}`;
-    const label = `highlight_${sanitizeTitle(reel.title)}`;
-
-    const res = await apiFetch(
-      page,
-      `/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(reelId)}`
-    );
-    const reelData = res.json && res.json.reels ? res.json.reels[reelId] : null;
-    const items = reelData && Array.isArray(reelData.items) ? reelData.items : [];
-
-    for (const item of items) {
-      const hasVideo = Array.isArray(item.video_versions) && item.video_versions.length > 0;
-      let url = null;
-      let type = 'image';
-      if (hasVideo) {
-        url = item.video_versions[0].url;
-        type = 'video';
-      } else if (
-        item.image_versions2 &&
-        Array.isArray(item.image_versions2.candidates) &&
-        item.image_versions2.candidates.length
-      ) {
-        url = item.image_versions2.candidates[0].url;
-      }
-      if (url && !seen.has(url)) {
-        seen.add(url);
-        media.push({ type, url, label });
-        added++;
-        onProgress({ found: media.length });
-      }
-    }
-    await sleep(400); // be gentle between reels
-  }
-  onLog(`Highlights: added ${added} media item(s) from ${reels.length} highlight(s).`);
+  return anySuccess;
 }
 
 // --- Login -----------------------------------------------------------------
@@ -392,7 +280,6 @@ async function backupProfile(opts) {
     creds, // { user, password, code } or null
     outputDir, // per-profile directory
     sessionDir, // where session cookie files live
-    includeHighlights = true,
     onProgress = () => {},
     onLog = () => {},
   } = opts;
@@ -498,36 +385,7 @@ async function backupProfile(opts) {
     let apiWorked = false;
     if (userId) {
       onLog('Fetching all posts via the timeline API…');
-      let r = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
-      apiWorked = r.anySuccess;
-
-      // HTTP 401/403 means the (possibly cached) session isn't authenticated.
-      // If we have credentials, log in fresh and retry once; the highlights
-      // fetch below then runs authenticated too.
-      if (!apiWorked && (r.lastStatus === 401 || r.lastStatus === 403)) {
-        if (creds) {
-          onLog(`Not authenticated (HTTP ${r.lastStatus}). Logging in again…`);
-          try {
-            if (sessionFile && fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile);
-            await performLogin(context, page, creds, onLog);
-            if (sessionFile) await context.storageState({ path: sessionFile });
-            await page.goto(`${BASE_URL}/${encodeURIComponent(profile)}/`, {
-              waitUntil: 'domcontentloaded',
-              timeout: 60000,
-            });
-            await sleep(1500);
-            r = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
-            apiWorked = r.anySuccess;
-          } catch (e) {
-            onLog(`Re-login failed: ${e.message}`);
-          }
-        } else {
-          onLog(
-            `Instagram requires login for full access (HTTP ${r.lastStatus}). ` +
-              'Expand the Login section, provide your credentials, and try again.'
-          );
-        }
-      }
+      apiWorked = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
     }
 
     // Fall back to scrolling only if the API didn't work — scrolling a real
@@ -599,30 +457,20 @@ async function backupProfile(opts) {
           'can help if it fell back to scrolling.'
       );
     }
-
-    // Story highlights (saved reels above the posts grid).
-    if (includeHighlights && userId) {
-      onLog('Fetching story highlights…');
-      await harvestHighlights(page, userId, media, seen, onLog, onProgress).catch((e) =>
-        onLog(`Highlights fetch failed: ${e.message}`)
-      );
-    }
-
     if (media.length === 0) {
       throw new Error(
         (creds
-          ? 'Logged in, but no posts or highlights were found. '
+          ? 'Logged in, but no posts were found. '
           : 'No posts were found (Instagram often requires login — expand "Login" and try again). ') +
           'The account may be empty/private, or Instagram changed their page format.'
       );
     }
     onLog('Downloading…');
 
-    // Posts are named "<username>_<N>.<ext>"; highlights carry a label and are
-    // named "<username>_highlight_<title>_<N>.<ext>". A manifest maps each
-    // media's stable key (its CDN path basename, which contains a content hash)
-    // to the assigned filename, so re-running keeps numbering and only fetches
-    // new media.
+    // Files are named "<username>_<N>.<ext>". A manifest maps each media's
+    // stable key (its CDN path basename, which contains a content hash) to the
+    // assigned filename, so re-running a backup keeps existing numbering and
+    // only downloads new posts.
     const manifestPath = path.join(outputDir, '.manifest.json');
     let manifest = {};
     try {
@@ -630,22 +478,12 @@ async function backupProfile(opts) {
     } catch (_) {
       manifest = {};
     }
-
-    // Per-prefix counters continue after the highest N already assigned for that
-    // prefix, so posts and each highlight number independently and gaplessly.
-    const counters = {};
-    const ensureCounter = (prefix) => {
-      if (counters[prefix] != null) return;
-      const re = new RegExp(
-        '^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_(\\d+)\\.[^.]+$'
-      );
-      let mx = 0;
-      for (const assigned of Object.values(manifest)) {
-        const m = String(assigned).match(re);
-        if (m) mx = Math.max(mx, Number(m[1]));
-      }
-      counters[prefix] = mx;
-    };
+    // Continue numbering after the highest N already assigned.
+    let nextIndex = 0;
+    for (const assigned of Object.values(manifest)) {
+      const m = String(assigned).match(/_(\d+)\.[^.]+$/);
+      if (m) nextIndex = Math.max(nextIndex, Number(m[1]));
+    }
 
     let downloaded = 0;
     for (const item of media) {
@@ -659,16 +497,14 @@ async function backupProfile(opts) {
       }
 
       const ext = extFor(item.url, item.type);
-      const prefix = item.label ? `${profile}_${item.label}` : profile;
-      ensureCounter(prefix);
-      const candidate = `${prefix}_${counters[prefix] + 1}.${ext}`;
+      const candidate = `${profile}_${nextIndex + 1}.${ext}`;
       const dest = path.join(outputDir, candidate);
 
       try {
         const res = await context.request.get(item.url, { timeout: 60000 });
         if (res.ok()) {
           fs.writeFileSync(dest, await res.body());
-          counters[prefix] += 1;
+          nextIndex += 1;
           manifest[key] = candidate;
           downloaded++;
           fs.writeFileSync(manifestPath, JSON.stringify(manifest));

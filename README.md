@@ -33,10 +33,6 @@ bare username. Files are saved as `<username>_<N>.jpg` / `.mp4` in a per-profile
 folder inside `MEDIA_DIR` (see [Configuration](#configuration)). Re-running a
 backup keeps the existing numbering and only downloads new posts.
 
-**Story highlights:** the saved reels above the posts grid are downloaded too
-(toggle *Also download story highlights* in the form). They're saved alongside
-the posts as `<username>_highlight_<title>_<N>.<ext>`.
-
 **Gallery:** each profile is a collapsible section. Tick the checkboxes on
 individual items to **download** the selection (as a single `.zip`) or **delete**
 them; use *Select all* to act on the whole profile at once.
