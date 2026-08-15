@@ -215,6 +215,92 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   return anySuccess;
 }
 
+function sanitizeTitle(raw) {
+  return (
+    String(raw || '')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'untitled'
+  );
+}
+
+// Story highlights (the saved reels above the posts grid). Two API calls:
+// highlights_tray lists the reels, reels_media returns each reel's story items.
+// Discovered media are labelled so downloads are named per highlight.
+async function harvestHighlights(page, userId, media, seen, onLog, onProgress) {
+  const tray = await page
+    .evaluate(async (id) => {
+      try {
+        const res = await fetch(`/api/v1/highlights/${id}/highlights_tray/`, {
+          headers: { 'X-IG-App-ID': '936619743392459' },
+          credentials: 'include',
+        });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_) {
+        return null;
+      }
+    }, userId)
+    .catch(() => null);
+
+  const reels = tray && Array.isArray(tray.tray) ? tray.tray : [];
+  if (!reels.length) {
+    onLog('No story highlights found.');
+    return;
+  }
+  onLog(`Found ${reels.length} highlight(s); fetching their media…`);
+
+  let added = 0;
+  for (const reel of reels) {
+    const reelId = reel.id; // e.g. "highlight:1789..."
+    const label = `highlight_${sanitizeTitle(reel.title)}`;
+
+    const data = await page
+      .evaluate(async (rid) => {
+        try {
+          const res = await fetch(
+            `/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(rid)}`,
+            { headers: { 'X-IG-App-ID': '936619743392459' }, credentials: 'include' }
+          );
+          if (!res.ok) return null;
+          return await res.json();
+        } catch (_) {
+          return null;
+        }
+      }, reelId)
+      .catch(() => null);
+
+    const items =
+      data && data.reels && data.reels[reelId] && Array.isArray(data.reels[reelId].items)
+        ? data.reels[reelId].items
+        : [];
+
+    for (const item of items) {
+      const hasVideo = Array.isArray(item.video_versions) && item.video_versions.length > 0;
+      let url = null;
+      let type = 'image';
+      if (hasVideo) {
+        url = item.video_versions[0].url;
+        type = 'video';
+      } else if (
+        item.image_versions2 &&
+        Array.isArray(item.image_versions2.candidates) &&
+        item.image_versions2.candidates.length
+      ) {
+        url = item.image_versions2.candidates[0].url;
+      }
+      if (url && !seen.has(url)) {
+        seen.add(url);
+        media.push({ type, url, label });
+        added++;
+        onProgress({ found: media.length });
+      }
+    }
+    await sleep(400); // be gentle between reels
+  }
+  onLog(`Highlights: added ${added} media item(s) from ${reels.length} highlight(s).`);
+}
+
 // --- Login -----------------------------------------------------------------
 async function performLogin(context, page, creds, log) {
   log('Logging in…');
@@ -280,6 +366,7 @@ async function backupProfile(opts) {
     creds, // { user, password, code } or null
     outputDir, // per-profile directory
     sessionDir, // where session cookie files live
+    includeHighlights = true,
     onProgress = () => {},
     onLog = () => {},
   } = opts;
@@ -457,20 +544,30 @@ async function backupProfile(opts) {
           'can help if it fell back to scrolling.'
       );
     }
+
+    // Story highlights (saved reels above the posts grid).
+    if (includeHighlights && userId) {
+      onLog('Fetching story highlights…');
+      await harvestHighlights(page, userId, media, seen, onLog, onProgress).catch((e) =>
+        onLog(`Highlights fetch failed: ${e.message}`)
+      );
+    }
+
     if (media.length === 0) {
       throw new Error(
         (creds
-          ? 'Logged in, but no posts were found. '
+          ? 'Logged in, but no posts or highlights were found. '
           : 'No posts were found (Instagram often requires login — expand "Login" and try again). ') +
           'The account may be empty/private, or Instagram changed their page format.'
       );
     }
     onLog('Downloading…');
 
-    // Files are named "<username>_<N>.<ext>". A manifest maps each media's
-    // stable key (its CDN path basename, which contains a content hash) to the
-    // assigned filename, so re-running a backup keeps existing numbering and
-    // only downloads new posts.
+    // Posts are named "<username>_<N>.<ext>"; highlights carry a label and are
+    // named "<username>_highlight_<title>_<N>.<ext>". A manifest maps each
+    // media's stable key (its CDN path basename, which contains a content hash)
+    // to the assigned filename, so re-running keeps numbering and only fetches
+    // new media.
     const manifestPath = path.join(outputDir, '.manifest.json');
     let manifest = {};
     try {
@@ -478,12 +575,22 @@ async function backupProfile(opts) {
     } catch (_) {
       manifest = {};
     }
-    // Continue numbering after the highest N already assigned.
-    let nextIndex = 0;
-    for (const assigned of Object.values(manifest)) {
-      const m = String(assigned).match(/_(\d+)\.[^.]+$/);
-      if (m) nextIndex = Math.max(nextIndex, Number(m[1]));
-    }
+
+    // Per-prefix counters continue after the highest N already assigned for that
+    // prefix, so posts and each highlight number independently and gaplessly.
+    const counters = {};
+    const ensureCounter = (prefix) => {
+      if (counters[prefix] != null) return;
+      const re = new RegExp(
+        '^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_(\\d+)\\.[^.]+$'
+      );
+      let mx = 0;
+      for (const assigned of Object.values(manifest)) {
+        const m = String(assigned).match(re);
+        if (m) mx = Math.max(mx, Number(m[1]));
+      }
+      counters[prefix] = mx;
+    };
 
     let downloaded = 0;
     for (const item of media) {
@@ -497,14 +604,16 @@ async function backupProfile(opts) {
       }
 
       const ext = extFor(item.url, item.type);
-      const candidate = `${profile}_${nextIndex + 1}.${ext}`;
+      const prefix = item.label ? `${profile}_${item.label}` : profile;
+      ensureCounter(prefix);
+      const candidate = `${prefix}_${counters[prefix] + 1}.${ext}`;
       const dest = path.join(outputDir, candidate);
 
       try {
         const res = await context.request.get(item.url, { timeout: 60000 });
         if (res.ok()) {
           fs.writeFileSync(dest, await res.body());
-          nextIndex += 1;
+          counters[prefix] += 1;
           manifest[key] = candidate;
           downloaded++;
           fs.writeFileSync(manifestPath, JSON.stringify(manifest));

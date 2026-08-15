@@ -25,6 +25,7 @@ const profileInput = document.getElementById('ig-profile');
 const userInput = document.getElementById('ig-user');
 const passInput = document.getElementById('ig-pass');
 const twoFaInput = document.getElementById('ig-2fa');
+const highlightsInput = document.getElementById('ig-highlights');
 const scrapeBtn = document.getElementById('scrape-btn');
 const statusCard = document.getElementById('scrape-status');
 const statusLabel = document.getElementById('status-label');
@@ -42,7 +43,7 @@ scrapeForm.addEventListener('submit', async (e) => {
   const profile = profileInput.value.trim();
   if (!profile) return;
 
-  const payload = { profile };
+  const payload = { profile, highlights: highlightsInput.checked };
   if (userInput.value.trim() && passInput.value) {
     payload.login = {
       user: userInput.value.trim(),
