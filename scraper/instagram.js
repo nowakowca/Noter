@@ -169,6 +169,7 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   let maxId = '';
   let pages = 0;
   let anySuccess = false;
+  let lastStatus = null;
 
   while (pages < 400) {
     const qs = 'count=33' + (maxId ? '&max_id=' + encodeURIComponent(maxId) : '');
@@ -176,11 +177,12 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
 
     let result = await apiFetch(page, url);
     // Retry once after a pause if Instagram rate-limits.
-    if (!result.ok && (result.status === 429 || result.status === 403)) {
+    if (!result.ok && result.status === 429) {
       onLog(`Timeline API returned HTTP ${result.status} (rate limit) — waiting 15s and retrying…`);
       await sleep(15000);
       result = await apiFetch(page, url);
     }
+    lastStatus = result.status;
 
     if (!result.ok || !result.json) {
       if (!anySuccess) {
@@ -208,7 +210,7 @@ async function harvestTimelineApi(page, userId, media, seen, onLog, onProgress) 
   if (anySuccess) {
     onLog(`Timeline API: fetched ${pages} page(s), ${media.length} media item(s).`);
   }
-  return anySuccess;
+  return { anySuccess, lastStatus };
 }
 
 function sanitizeTitle(raw) {
@@ -496,7 +498,36 @@ async function backupProfile(opts) {
     let apiWorked = false;
     if (userId) {
       onLog('Fetching all posts via the timeline API…');
-      apiWorked = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
+      let r = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
+      apiWorked = r.anySuccess;
+
+      // HTTP 401/403 means the (possibly cached) session isn't authenticated.
+      // If we have credentials, log in fresh and retry once; the highlights
+      // fetch below then runs authenticated too.
+      if (!apiWorked && (r.lastStatus === 401 || r.lastStatus === 403)) {
+        if (creds) {
+          onLog(`Not authenticated (HTTP ${r.lastStatus}). Logging in again…`);
+          try {
+            if (sessionFile && fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile);
+            await performLogin(context, page, creds, onLog);
+            if (sessionFile) await context.storageState({ path: sessionFile });
+            await page.goto(`${BASE_URL}/${encodeURIComponent(profile)}/`, {
+              waitUntil: 'domcontentloaded',
+              timeout: 60000,
+            });
+            await sleep(1500);
+            r = await harvestTimelineApi(page, userId, media, seen, onLog, onProgress);
+            apiWorked = r.anySuccess;
+          } catch (e) {
+            onLog(`Re-login failed: ${e.message}`);
+          }
+        } else {
+          onLog(
+            `Instagram requires login for full access (HTTP ${r.lastStatus}). ` +
+              'Expand the Login section, provide your credentials, and try again.'
+          );
+        }
+      }
     }
 
     // Fall back to scrolling only if the API didn't work — scrolling a real
