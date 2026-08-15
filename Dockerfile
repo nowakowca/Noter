@@ -22,19 +22,25 @@ ENV NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=/app/data \
     MEDIA_DIR=/app/media \
+    PUID=1000 \
+    PGID=1000 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json server.js db.js ./
+COPY package.json server.js db.js zip.js ./
 COPY scraper ./scraper
 COPY public ./public
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Install Chromium and its OS dependencies for the Instagram backup feature.
-# `npx playwright install` pulls the browser build matching the installed
-# playwright npm version, so the two never drift apart.
+# Install Chromium and its OS dependencies for the Instagram backup feature, plus
+# gosu for dropping privileges to the target user. `npx playwright install` pulls
+# the browser build matching the installed playwright npm version.
 RUN npx playwright install --with-deps chromium \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get update \
+  && apt-get install -y --no-install-recommends gosu \
+  && rm -rf /var/lib/apt/lists/* \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Persist the SQLite database and downloaded media outside the image layers.
 RUN mkdir -p /app/data /app/media
@@ -45,4 +51,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD node -e "fetch('http://localhost:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# Entrypoint fixes ownership then drops from root to PUID:PGID before running.
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]

@@ -114,7 +114,15 @@ variable).
 | `PORT`          | `3000`                   | Port the HTTP server listens on                         |
 | `DATA_DIR`      | `./data`                 | SQLite database and saved login sessions                |
 | `MEDIA_DIR`     | `${DATA_DIR}/instagram`  | Where downloaded media is written (per-profile folders) |
+| `PUID` / `PGID` | `1000` / `1000`          | Docker only: user/group that owns the DB and downloads  |
 | `CHROMIUM_PATH` | *(Playwright default)*   | Override the Chromium binary used for backups           |
+
+### File ownership (Docker)
+
+The container starts as root, fixes ownership of the data and media
+directories, then drops to `PUID:PGID` (default `1000:1000`) before running.
+So downloaded files are owned by that user — set `PUID`/`PGID` to your host
+user (`id -u` / `id -g`) if it differs.
 
 > In Docker, `MEDIA_DIR` is `/app/media` and is bind-mounted from the host
 > `MEDIA_PATH` (default `./backups`). See

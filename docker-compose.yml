@@ -8,15 +8,22 @@ services:
     environment:
       - PORT=3000
       - DATA_DIR=/app/data
-      # Downloaded Instagram media is written here (inside the container).
       - MEDIA_DIR=/app/media
+      # Own downloaded files as this host user (e.g. your OMV user).
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     volumes:
       # App state (SQLite database, saved login sessions).
       - noter-data:/app/data
       # Backed-up media. Point MEDIA_PATH at any host directory to save your
-      # backups outside the app — e.g. MEDIA_PATH=/home/me/Pictures/instagram
-      # (set it in a .env file next to this compose file, or in your shell).
-      # Defaults to ./backups next to this file.
+      # backups outside the app. Set it in a .env file next to this compose
+      # file (see .env.example) or in your shell. Defaults to ./backups.
+      #
+      # If your path contains spaces, prefer the long syntax below instead of
+      # this line, e.g.:
+      #   - type: bind
+      #     source: "/srv/dev-disk-by-uuid-XXXX/SSD Big-Data/Photos/Instagram"
+      #     target: /app/media
       - ${MEDIA_PATH:-./backups}:/app/media
     restart: unless-stopped
 
