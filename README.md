@@ -116,6 +116,20 @@ variable).
 | `MEDIA_DIR`     | `${DATA_DIR}/instagram`  | Where downloaded media is written (per-profile folders) |
 | `PUID` / `PGID` | `1000` / `1000`          | Docker only: user/group that owns the DB and downloads  |
 | `CHROMIUM_PATH` | *(Playwright default)*   | Override the Chromium binary used for backups           |
+| `IG_SCROLL_DELAY`    | `2000`  | ms to wait between scrolls (raise on slow connections)     |
+| `IG_SCROLL_PATIENCE` | `10`    | consecutive "no new media" rounds before stopping          |
+| `IG_MAX_SCROLLS`     | `1500`  | hard cap on scroll iterations                              |
+
+### Not all posts downloaded?
+
+Instagram loads posts lazily as you scroll, so very large profiles or slow
+connections can stop short. The backup status log helps you see what happened —
+it reports the profile's total post count, a running discovery count per scroll,
+why scrolling stopped, and a final `discovered N of M posts` line. If it stopped
+early, raise `IG_SCROLL_PATIENCE` (e.g. `20`) and/or `IG_SCROLL_DELAY` (e.g.
+`3500`) and run it again. Note that a carousel counts as one *post* but yields
+several *media* files, so the media count can legitimately exceed the post
+count.
 
 ### File ownership (Docker)
 

@@ -8,8 +8,14 @@
 // Doing this in-process avoids needing an external tool like gosu/su-exec (and
 // the extra apt install that came with it).
 if (typeof process.getuid === 'function' && process.getuid() === 0) {
-  const uid = parseInt(process.env.PUID || '1000', 10) || 1000;
-  const gid = parseInt(process.env.PGID || '1000', 10) || 1000;
+  // Note: don't use `|| 1000` — it would turn a valid PUID=0 into 1000.
+  let uid = parseInt(process.env.PUID, 10);
+  let gid = parseInt(process.env.PGID, 10);
+  if (Number.isNaN(uid)) uid = 1000;
+  if (Number.isNaN(gid)) gid = 1000;
+
+  if (uid === 0 && gid === 0) return; // explicitly asked to stay root
+
   try {
     if (typeof process.setgroups === 'function') process.setgroups([]);
     process.setgid(gid);

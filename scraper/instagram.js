@@ -24,6 +24,12 @@ const EXECUTABLE_PATH = process.env.CHROMIUM_PATH || undefined;
 // Overridable so the pipeline can be tested against a local mock.
 const BASE_URL = process.env.IG_BASE_URL || 'https://www.instagram.com';
 
+// Scroll tuning (troubleshooting knobs). Raise the delay/patience on slow
+// connections or very large profiles so pagination isn't cut short.
+const SCROLL_DELAY = parseInt(process.env.IG_SCROLL_DELAY || '2000', 10); // ms between scrolls
+const SCROLL_PATIENCE = parseInt(process.env.IG_SCROLL_PATIENCE || '10', 10); // stable rounds before stopping
+const MAX_SCROLLS = parseInt(process.env.IG_MAX_SCROLLS || '1500', 10); // hard cap on scroll iterations
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -302,30 +308,88 @@ async function backupProfile(opts) {
     // 1) First page of posts embedded in the HTML.
     await harvestEmbedded(page, media, seen);
     // 2) First page via Instagram's own web API (robust to layout changes).
-    await harvestWebProfileInfo(page, profile, media, seen);
+    const profileInfo = await harvestWebProfileInfo(page, profile, media, seen);
     if (media.length) onProgress({ found: media.length });
 
+    // The profile's total post count (carousels count as one post), useful as a
+    // reference against how many media items we end up finding.
+    let totalPosts = null;
+    try {
+      totalPosts =
+        profileInfo.data.user.edge_owner_to_timeline_media.count;
+    } catch (_) {
+      /* not available */
+    }
+    if (totalPosts != null) {
+      onLog(
+        `Profile reports ${totalPosts} post(s). Found ${media.length} media item(s) on the first page.`
+      );
+    }
+
     onLog('Scrolling the wall to load the rest of the posts…');
-    // Scroll until no new media appears for several rounds; re-harvest embedded
-    // JSON each round as a fallback to the intercepted XHRs.
+    // Stop only when BOTH the media count and the page height stay unchanged for
+    // SCROLL_PATIENCE consecutive rounds — a plateau in the count alone can just
+    // mean the next page is still loading.
     let stableRounds = 0;
     let lastCount = media.length;
-    for (let i = 0; i < 400 && stableRounds < 5; i++) {
-      await page.mouse.wheel(0, 4000);
-      await sleep(1400);
+    let lastHeight = 0;
+    let stopReason = 'reached the end';
+    let i = 0;
+    for (; i < MAX_SCROLLS; i++) {
+      // Jump to the bottom to bring the lazy-load sentinel into view…
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.mouse.wheel(0, 6000);
+      await sleep(SCROLL_DELAY);
+      // …then "jiggle" up and back down so IntersectionObserver-based loaders
+      // fire again even when the sentinel was already on screen (a transition is
+      // required to re-trigger them).
+      await page.evaluate(() => window.scrollBy(0, -400)).catch(() => {});
+      await sleep(250);
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+      await sleep(Math.max(250, SCROLL_DELAY - 250));
       await harvestEmbedded(page, media, seen);
-      if (media.length === lastCount) {
+
+      const height = await page
+        .evaluate(() => document.body.scrollHeight)
+        .catch(() => lastHeight);
+      const grewCount = media.length !== lastCount;
+      const grewHeight = height !== lastHeight;
+
+      if (!grewCount && !grewHeight) {
         stableRounds++;
       } else {
         stableRounds = 0;
-        lastCount = media.length;
-        onProgress({ found: media.length });
+        if (grewCount) onProgress({ found: media.length });
       }
+      lastCount = media.length;
+      lastHeight = height;
+
+      // Progress heartbeat every few rounds so the log shows the discovery curve.
+      if (i % 5 === 0) {
+        onLog(
+          `  scroll ${i}: ${media.length} media` +
+            (totalPosts != null ? ` (of ~${totalPosts} posts)` : '') +
+            `, stable ${stableRounds}/${SCROLL_PATIENCE}`
+        );
+      }
+
+      if (stableRounds >= SCROLL_PATIENCE) break;
     }
+    if (i >= MAX_SCROLLS) stopReason = `hit the scroll cap (${MAX_SCROLLS})`;
+    onLog(`Stopped scrolling after ${i} round(s) — ${stopReason}.`);
 
     onLog(
-      `Saw ${jsonResponses} data response(s); discovered ${media.length} media item(s).`
+      `Saw ${jsonResponses} data response(s); discovered ${media.length} media item(s)` +
+        (totalPosts != null ? ` from a profile of ${totalPosts} post(s)` : '') +
+        '.'
     );
+    if (totalPosts != null && media.length < totalPosts) {
+      onLog(
+        'Fewer media than posts — pagination may have stopped early. Try raising ' +
+          'IG_SCROLL_PATIENCE / IG_SCROLL_DELAY, or the profile has content this ' +
+          "tool doesn't fetch (e.g. tagged posts)."
+      );
+    }
     if (media.length === 0) {
       throw new Error(
         (creds
