@@ -26,6 +26,7 @@ const userInput = document.getElementById('ig-user');
 const passInput = document.getElementById('ig-pass');
 const twoFaInput = document.getElementById('ig-2fa');
 const fetchBtn = document.getElementById('fetch-btn');
+const pasteBtn = document.getElementById('paste-btn');
 const fetchStatus = document.getElementById('fetch-status');
 const preview = document.getElementById('preview');
 const previewUser = document.getElementById('preview-user');
@@ -81,6 +82,29 @@ postForm.addEventListener('submit', async (e) => {
   } finally {
     fetchBtn.disabled = false;
     fetchBtn.textContent = 'Fetch post';
+  }
+});
+
+// --- Paste from clipboard --------------------------------------------------
+pasteBtn.addEventListener('click', async () => {
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      throw new Error('unavailable');
+    }
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) {
+      setStatus('Clipboard is empty.', 'error');
+      return;
+    }
+    urlInput.value = text;
+    // Submit the form (runs the fetch handler).
+    postForm.requestSubmit();
+  } catch (_) {
+    setStatus(
+      'Could not read the clipboard. This needs a secure context (https:// or ' +
+        'localhost) and clipboard permission — paste the link manually instead.',
+      'error'
+    );
   }
 });
 
