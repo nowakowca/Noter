@@ -72,6 +72,59 @@ function findUsername(node) {
   return found;
 }
 
+// Find the specific post object in an arbitrary JSON tree by its shortcode, so
+// we extract only THIS post's media (and owner) — not unrelated media that may
+// also be embedded on the page.
+function findPostNode(node, shortcode) {
+  let found = null;
+  (function walk(n) {
+    if (found || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) {
+      for (const c of n) walk(c);
+      return;
+    }
+    if (n.code === shortcode || n.shortcode === shortcode) {
+      found = n;
+      return;
+    }
+    for (const k of Object.keys(n)) walk(n[k]);
+  })(node);
+  return found;
+}
+
+function usernameOf(node) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.owner && typeof node.owner.username === 'string') return node.owner.username;
+  if (node.user && typeof node.user.username === 'string') return node.user.username;
+  return findUsername(node);
+}
+
+// Parse the post's own JSON embedded in the page HTML (<script
+// type="application/json"> blocks). Returns { media added, username } for the
+// post matching `shortcode`. Works for public posts without logging in.
+async function harvestEmbeddedPost(page, shortcode, media, seen) {
+  const blobs = await page
+    .$$eval('script[type="application/json"]', (els) => els.map((e) => e.textContent))
+    .catch(() => []);
+  let username = null;
+  let matched = false;
+  for (const blob of blobs) {
+    let json;
+    try {
+      json = JSON.parse(blob);
+    } catch (_) {
+      continue;
+    }
+    const node = findPostNode(json, shortcode);
+    if (node) {
+      matched = true;
+      extractMedia(node, media, seen);
+      if (!username) username = usernameOf(node);
+    }
+  }
+  return { matched, username };
+}
+
 async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
   const shortcode = parseShortcode(url);
   if (!shortcode) {
@@ -98,20 +151,7 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
     const media = [];
     const seen = new Set();
     let username = null;
-
-    // Capture media/owner from any JSON the page loads.
-    page.on('response', async (r) => {
-      try {
-        const ct = (r.headers()['content-type'] || '').toLowerCase();
-        if (!ct.includes('json')) return;
-        const j = await r.json().catch(() => null);
-        if (!j) return;
-        extractMedia(j, media, seen);
-        if (!username) username = findUsername(j);
-      } catch (_) {
-        /* ignore */
-      }
-    });
+    const notes = [];
 
     onLog(`Opening ${shortcode}…`);
     await page.goto(`${BASE_URL}/p/${encodeURIComponent(shortcode)}/`, {
@@ -120,8 +160,17 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
     });
     await sleep(2500);
 
-    // Precise path: the media-info endpoint returns exactly this post's media
-    // (images, video_versions, carousel children) plus the owner.
+    // 1) Precise, no-login: the post's own JSON embedded in the page HTML.
+    const emb = await harvestEmbeddedPost(page, shortcode, media, seen);
+    if (emb.username) username = emb.username;
+    notes.push(
+      emb.matched
+        ? `embedded post data: ${media.length} media`
+        : 'embedded post data: not found'
+    );
+
+    // 2) media-info endpoint (needs a valid login) — fills carousels/video the
+    //    embedded data might lack, and the owner if still unknown.
     if (mediaId) {
       const info = await page
         .evaluate(async (id) => {
@@ -139,18 +188,20 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
         .catch(() => ({ ok: false }));
 
       if (info.ok && info.json) {
+        const before = media.length;
         extractMedia(info.json, media, seen);
         try {
           username = info.json.items[0].user.username || username;
         } catch (_) {
           /* keep existing */
         }
+        notes.push(`media-info: OK (+${media.length - before} media)`);
       } else {
-        onLog(`media-info endpoint: HTTP ${info.status || 'error'} (using page data).`);
+        notes.push(`media-info: HTTP ${info.status || 'error'}`);
       }
     }
 
-    // Fallback: Open Graph meta tags (work for many public posts without login).
+    // 3) Last resort: Open Graph (only the first, cropped image — flag it).
     if (!media.length) {
       const og = await page
         .evaluate(() => ({
@@ -165,10 +216,10 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
         const m = og.title.match(/\(@([A-Za-z0-9._]+)\)/) || og.title.match(/^([A-Za-z0-9._]+)/);
         if (m) username = m[1];
       }
+      if (media.length) notes.push('fell back to Open Graph (first image only)');
     }
 
     if (!media.length) {
-      // Detect a login wall for a clearer message.
       const needLogin = await page
         .locator('input[name="password"]')
         .count()
@@ -180,7 +231,8 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
       );
     }
 
-    return { username: sanitizeUser(username), shortcode, media };
+    onLog(notes.join(' · '));
+    return { username: sanitizeUser(username), shortcode, media, notes };
   } finally {
     await browser.close().catch(() => {});
   }

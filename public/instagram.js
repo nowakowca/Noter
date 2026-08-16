@@ -85,7 +85,8 @@ postForm.addEventListener('submit', async (e) => {
 });
 
 function renderPreview(data) {
-  previewUser.textContent = `@${data.username} · ${data.media.length} item(s)`;
+  const notes = data.notes && data.notes.length ? ` — ${data.notes.join(' · ')}` : '';
+  previewUser.textContent = `@${data.username} · ${data.media.length} item(s)${notes}`;
   previewGrid.innerHTML = '';
   for (const m of data.media) {
     const cell = document.createElement('div');
