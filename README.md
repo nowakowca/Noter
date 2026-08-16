@@ -11,45 +11,41 @@ Runs as a single Docker container with a persistent SQLite database.
 - Add, edit and delete items
 - Each item has a name, optional hyperlink, optional description, and a completed checkbox
 - Filter by **All / Active / Completed**
-- **Instagram Backup** tab — back up a public profile's posts (photos, videos, carousels) to your machine
+- **Instagram** tab — save the media from a single post / reel by pasting its link
 - Data persists across restarts via a Docker volume
 - No external services — everything runs locally
 
-## Instagram Backup
+## Instagram (save a post by link)
 
-A second tab lets you back up the **posts** (photos, videos and carousels) from an
-Instagram profile you're entitled to save — your own account or a public profile,
-one at a time.
+A second tab lets you save the media (photo, video, or every image in a carousel)
+from a single Instagram **post / reel** you're entitled to save.
 
-**How it works (hybrid approach):** a real Chromium browser (via
-[Playwright](https://playwright.dev)) opens the profile and scrolls the wall.
-As the page loads, Instagram's own JSON API responses are intercepted; those
-contain the direct full-resolution image and `.mp4` video URLs, which are then
-downloaded straight to disk. This gives browser-level realism *and* clean,
-playable video files.
+**How it works:** paste a post link, and a real Chromium browser (via
+[Playwright](https://playwright.dev)) opens it and reads that post's media via
+Instagram's own media-info endpoint (with an Open Graph fallback). The media is
+**previewed full-size** so you can check it, then **Save all** downloads it to
+disk. One post at a time — no profile scraping, no scrolling, no pagination, so
+it's far more robust.
 
-**Enter a profile** as a full link (`https://www.instagram.com/username/`) or a
-bare username. Files are saved as `<username>_<N>.jpg` / `.mp4` in a per-profile
-folder inside `MEDIA_DIR` (see [Configuration](#configuration)). Re-running a
-backup keeps the existing numbering and only downloads new posts.
+**Files** are saved as `<username>_<N>.jpg` / `.mp4` in a per-user folder inside
+`MEDIA_DIR` (see [Configuration](#configuration)); saving the same media twice is
+de-duplicated.
 
-**Gallery:** each profile is a collapsible section. Tick the checkboxes on
-individual items to **download** the selection (as a single `.zip`) or **delete**
-them; use *Select all* to act on the whole profile at once.
+**Saved-media gallery:** each user is a collapsible section. Tick the checkboxes
+to **download** a selection (as a single `.zip`) or **delete** it; use *Select
+all* to act on the whole user at once.
 
-**Optional login:** you can expand the *Login* section to supply your own
-Instagram credentials (and a 2FA code) for more reliable / larger downloads. The
-password is used only for that run — it is never logged or stored in plain text.
-A session cookie is cached under `DATA_DIR/ig-sessions/` so you don't re-enter
-it. Anonymous mode (no login) also works for public profiles — though Instagram
-increasingly requires login to view profile media.
+**Optional login:** expand the *Login* section to supply your own Instagram
+credentials (and a 2FA code) for private posts or when Instagram asks. The
+password is used only for that run — never logged or stored in plain text — and a
+session cookie is cached under `DATA_DIR/ig-sessions/`. Many public posts work
+without login.
 
 > **Please note**
 > - Automated access is against Instagram's [Terms of Service](https://help.instagram.com/581066165581870); an account used for login can be flagged or banned.
-> - Only back up content you have the right to save. Media remains the property of its posters.
-> - This depends on Instagram's current site structure and can break when they change it.
-> - Accounts protected by 2FA or a "suspicious login" security challenge may not be able to log in through the simple form; you'll get a clear error rather than a hang.
-> - Captions are **not** downloaded — media files only.
+> - Only save content you have the right to save. Media remains the property of its posters.
+> - This depends on Instagram's current site and can break if they change it.
+> - Captions are **not** saved — media files only.
 
 ## Item fields
 
@@ -115,27 +111,7 @@ variable).
 | `DATA_DIR`      | `./data`                 | SQLite database and saved login sessions                |
 | `MEDIA_DIR`     | `${DATA_DIR}/instagram`  | Where downloaded media is written (per-profile folders) |
 | `PUID` / `PGID` | `1000` / `1000`          | Docker only: user/group that owns the DB and downloads  |
-| `CHROMIUM_PATH` | *(Playwright default)*   | Override the Chromium binary used for backups           |
-| `IG_SCROLL_DELAY`    | `2000`  | ms to wait between scrolls (raise on slow connections)     |
-| `IG_SCROLL_PATIENCE` | `10`    | consecutive "no new media" rounds before stopping          |
-| `IG_MAX_SCROLLS`     | `1500`  | hard cap on scroll iterations                              |
-
-### Not all posts downloaded?
-
-Posts are fetched primarily by paginating Instagram's own timeline API
-(cursor-based), which walks every page deterministically — the status log shows
-`Timeline API: fetched N page(s)`. If that API is unavailable, it falls back to
-scrolling the page, which is less reliable (the `IG_SCROLL_*` knobs above tune
-it).
-
-The status log reports the profile's total post count and a final
-`Discovered N of M posts` line. If it comes up short:
-
-- A **carousel counts as one post but yields several media files**, so the media
-  count can legitimately *exceed* the post count.
-- If it fell back to scrolling and stopped early, raise `IG_SCROLL_PATIENCE`
-  (e.g. `20`) and/or `IG_SCROLL_DELAY` (e.g. `3500`).
-- Tagged posts and content Instagram hides from the timeline are not fetched.
+| `CHROMIUM_PATH` | *(Playwright default)*   | Override the Chromium binary used for fetching posts    |
 
 ### File ownership (Docker)
 
@@ -159,9 +135,9 @@ The frontend talks to a small REST API:
 | `PUT`    | `/api/items/:id`  | Update an item                       |
 | `PATCH`  | `/api/items/:id`  | Toggle / set the `completed` flag    |
 | `DELETE` | `/api/items/:id`  | Delete an item                       |
-| `POST`   | `/api/scrape`     | Start an Instagram backup            |
-| `GET`    | `/api/scrape/status` | Progress of the running backup    |
-| `GET`    | `/api/backups`    | List downloaded profiles and files   |
+| `POST`   | `/api/ig/fetch`   | Read a post's media (for preview)    |
+| `POST`   | `/api/ig/save`    | Download selected media to disk      |
+| `GET`    | `/api/backups`    | List saved users and their files     |
 | `POST`   | `/api/backups/:profile/download` | Zip up selected files     |
 | `POST`   | `/api/backups/:profile/delete`   | Delete selected files     |
 | `GET`    | `/healthz`        | Health check                         |
@@ -170,7 +146,7 @@ The frontend talks to a small REST API:
 
 - **Backend:** Node.js + Express
 - **Storage:** SQLite (via `better-sqlite3`); media on the filesystem
-- **Instagram backup:** Playwright (headless Chromium)
+- **Instagram:** Playwright (headless Chromium)
 - **Frontend:** vanilla HTML/CSS/JS (no build step)
 
 > The Docker image is built on `node:20` and installs Chromium via

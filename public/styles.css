@@ -309,7 +309,7 @@ a.item-name:hover {
 }
 
 /* --- Instagram backup ---------------------------------------------------- */
-#scrape-form {
+#post-form {
   margin-bottom: 1.25rem;
 }
 
@@ -348,6 +348,67 @@ a.item-name:hover {
   color: var(--muted);
   font-size: 0.78rem;
   margin: 0.85rem 0 0;
+}
+
+.fetch-status {
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.fetch-status.running {
+  color: var(--primary);
+}
+
+.fetch-status.done {
+  color: var(--success);
+}
+
+.fetch-status.error {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.preview {
+  margin-bottom: 1.5rem;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.85rem;
+}
+
+.preview-user {
+  font-weight: 600;
+}
+
+.saved-heading {
+  font-size: 1rem;
+  color: var(--muted);
+  margin: 1.5rem 0 0.75rem;
+}
+
+/* Preview shows the full, uncropped media (the gallery below stays square). */
+.preview .gallery-grid {
+  padding: 0;
+}
+
+.preview .gallery-cell {
+  aspect-ratio: auto;
+  background: var(--bg);
+}
+
+.preview .gallery-cell img,
+.preview .gallery-cell video {
+  object-fit: contain;
+  height: auto;
+  max-height: 420px;
 }
 
 .scrape-status {

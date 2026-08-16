@@ -54,19 +54,18 @@
       </section>
 
       <section id="view-instagram" class="view hidden">
-        <form id="scrape-form" class="card" autocomplete="off">
+        <form id="post-form" class="card" autocomplete="off">
           <div class="field">
-            <label for="ig-profile">Instagram profile link <span class="required">*</span></label>
-            <input type="text" id="ig-profile" placeholder="https://www.instagram.com/username/" required />
-            <p class="field-hint">Paste the full profile URL (a bare username also works).</p>
+            <label for="ig-url">Instagram post / reel link <span class="required">*</span></label>
+            <input type="text" id="ig-url" placeholder="https://www.instagram.com/p/XXXXXXXXXXX/" required />
+            <p class="field-hint">Paste a post, reel or tv link. It'll be previewed before you save it.</p>
           </div>
 
           <details class="login-details">
-            <summary>Login (optional — improves reliability, needed for private/large profiles)</summary>
+            <summary>Login (optional — needed for private posts or when Instagram asks)</summary>
             <p class="login-note">
-              Used only for this run to authenticate the browser. Never stored in
-              plain text or logged. A session cookie is cached so you don't re-enter it.
-              Automating an account can get it flagged or banned by Instagram.
+              Used only to authenticate the browser. Never stored in plain text or
+              logged. A session cookie is cached so you don't re-enter it.
             </p>
             <div class="field">
               <label for="ig-user">Your Instagram username</label>
@@ -83,25 +82,27 @@
           </details>
 
           <div class="form-actions">
-            <button type="submit" id="scrape-btn" class="btn btn-primary">Back up profile</button>
+            <button type="submit" id="fetch-btn" class="btn btn-primary">Fetch post</button>
           </div>
           <p class="disclaimer">
-            Backs up posts (photos, videos, carousels) from a public profile you're
-            entitled to save. Scraping is against Instagram's Terms of Service and can
-            break when Instagram changes their site.
+            Fetches the media from a single post you're entitled to save, and lets you
+            download it. This depends on Instagram's site and can break if they change it.
           </p>
         </form>
 
-        <div id="scrape-status" class="card scrape-status hidden">
-          <div class="status-head">
-            <span id="status-label" class="status-label"></span>
-            <span id="status-counts" class="status-counts"></span>
+        <div id="fetch-status" class="fetch-status hidden"></div>
+
+        <div id="preview" class="card preview hidden">
+          <div class="preview-head">
+            <span id="preview-user" class="preview-user"></span>
+            <button type="button" id="save-btn" class="btn btn-primary btn-sm">Save all</button>
           </div>
-          <pre id="status-log" class="status-log"></pre>
+          <div id="preview-grid" class="gallery-grid"></div>
         </div>
 
+        <h3 class="saved-heading">Saved media</h3>
         <div id="gallery" class="gallery"></div>
-        <p id="ig-empty" class="empty-state hidden">No backups yet — enter a profile above.</p>
+        <p id="ig-empty" class="empty-state hidden">Nothing saved yet — fetch a post above.</p>
       </section>
     </div>
 

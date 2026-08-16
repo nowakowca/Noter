@@ -20,29 +20,36 @@ tabs.forEach((tab) => {
 });
 
 // --- Elements --------------------------------------------------------------
-const scrapeForm = document.getElementById('scrape-form');
-const profileInput = document.getElementById('ig-profile');
+const postForm = document.getElementById('post-form');
+const urlInput = document.getElementById('ig-url');
 const userInput = document.getElementById('ig-user');
 const passInput = document.getElementById('ig-pass');
 const twoFaInput = document.getElementById('ig-2fa');
-const scrapeBtn = document.getElementById('scrape-btn');
-const statusCard = document.getElementById('scrape-status');
-const statusLabel = document.getElementById('status-label');
-const statusCounts = document.getElementById('status-counts');
-const statusLog = document.getElementById('status-log');
+const fetchBtn = document.getElementById('fetch-btn');
+const fetchStatus = document.getElementById('fetch-status');
+const preview = document.getElementById('preview');
+const previewUser = document.getElementById('preview-user');
+const previewGrid = document.getElementById('preview-grid');
+const saveBtn = document.getElementById('save-btn');
 const gallery = document.getElementById('gallery');
 const igEmpty = document.getElementById('ig-empty');
 
-let pollTimer = null;
+// The post currently being previewed.
+let current = null;
 
-// --- Scrape ----------------------------------------------------------------
-scrapeForm.addEventListener('submit', async (e) => {
+function setStatus(msg, kind) {
+  fetchStatus.textContent = msg || '';
+  fetchStatus.className = 'fetch-status' + (kind ? ' ' + kind : '');
+  fetchStatus.classList.toggle('hidden', !msg);
+}
+
+// --- Fetch a post ----------------------------------------------------------
+postForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  // Send the raw input (full URL or username); the server extracts the handle.
-  const profile = profileInput.value.trim();
-  if (!profile) return;
+  const url = urlInput.value.trim();
+  if (!url) return;
 
-  const payload = { profile };
+  const payload = { url };
   if (userInput.value.trim() && passInput.value) {
     payload.login = {
       user: userInput.value.trim(),
@@ -51,77 +58,77 @@ scrapeForm.addEventListener('submit', async (e) => {
     };
   }
 
-  scrapeBtn.disabled = true;
-  scrapeBtn.textContent = 'Starting…';
-  statusCard.classList.remove('hidden');
+  fetchBtn.disabled = true;
+  fetchBtn.textContent = 'Fetching…';
+  preview.classList.add('hidden');
+  setStatus('Opening the post and reading its media…', 'running');
 
   try {
-    const res = await fetch('/api/scrape', {
+    const res = await fetch('/api/ig/fetch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to start backup.');
-    // Clear the password from the field once submitted.
+    if (!res.ok) throw new Error(data.error || 'Could not fetch that post.');
     passInput.value = '';
     twoFaInput.value = '';
-    renderStatus(data);
-    startPolling();
+    current = data;
+    renderPreview(data);
+    setStatus('', null);
   } catch (err) {
-    statusLabel.textContent = 'Error';
-    statusLabel.className = 'status-label error';
-    statusLog.textContent = err.message;
-    resetButton();
+    setStatus(err.message, 'error');
+  } finally {
+    fetchBtn.disabled = false;
+    fetchBtn.textContent = 'Fetch post';
   }
 });
 
-function startPolling() {
-  stopPolling();
-  pollTimer = setInterval(async () => {
-    try {
-      const res = await fetch('/api/scrape/status');
-      const job = await res.json();
-      if (!job) return;
-      renderStatus(job);
-      if (job.status === 'done' || job.status === 'error') {
-        stopPolling();
-        resetButton();
-        loadBackups();
-      }
-    } catch (_) {
-      /* keep polling */
-    }
-  }, 1500);
+function renderPreview(data) {
+  previewUser.textContent = `@${data.username} · ${data.media.length} item(s)`;
+  previewGrid.innerHTML = '';
+  for (const m of data.media) {
+    const cell = document.createElement('div');
+    cell.className = 'gallery-cell';
+    cell.innerHTML =
+      m.type === 'video'
+        ? `<video src="${m.url}" controls preload="metadata"></video>`
+        : `<img src="${m.url}" alt="" />`;
+    previewGrid.appendChild(cell);
+  }
+  saveBtn.disabled = false;
+  saveBtn.textContent = `Save all (${data.media.length})`;
+  preview.classList.remove('hidden');
 }
 
-function stopPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = null;
-}
-
-function resetButton() {
-  scrapeBtn.disabled = false;
-  scrapeBtn.textContent = 'Back up profile';
-}
-
-function renderStatus(job) {
-  const labels = {
-    running: 'Running…',
-    done: 'Completed',
-    error: 'Error',
-  };
-  statusLabel.textContent = `@${job.profile} — ${labels[job.status] || job.status}`;
-  statusLabel.className = 'status-label ' + job.status;
-  statusCounts.textContent =
-    job.status === 'error'
-      ? ''
-      : `${job.downloaded} downloaded / ${job.found} found`;
-  const lines = (job.log || []).map((l) => l.msg);
-  if (job.error) lines.push(job.error);
-  statusLog.textContent = lines.join('\n');
-  statusLog.scrollTop = statusLog.scrollHeight;
-}
+// --- Save the previewed post ----------------------------------------------
+saveBtn.addEventListener('click', async () => {
+  if (!current) return;
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/ig/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: current.username, media: current.media }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Save failed.');
+    const added = data.saved.filter((s) => !s.existing).length;
+    setStatus(
+      `Saved ${added} new file(s) to @${data.username}` +
+        (data.skipped ? ` (${data.skipped} already saved)` : '') + '.',
+      'done'
+    );
+    preview.classList.add('hidden');
+    current = null;
+    loadBackups();
+  } catch (err) {
+    setStatus(err.message, 'error');
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save all';
+  }
+});
 
 // --- Gallery ---------------------------------------------------------------
 async function loadBackups() {

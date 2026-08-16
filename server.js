@@ -8,7 +8,11 @@ const fs = require('fs');
 const express = require('express');
 const { writeZip } = require('./zip');
 const db = require('./db');
-const { backupProfile } = require('./scraper/instagram');
+const { mediaKey, extFor } = require('./scraper/instagram');
+const { fetchPostMedia } = require('./scraper/post');
+
+const IG_UA =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -123,117 +127,115 @@ app.delete('/api/items/:id', (req, res) => {
   res.status(204).end();
 });
 
-// --- Instagram backup ------------------------------------------------------
-// One job at a time. Credentials are held only for the running job and never
-// persisted or logged.
-let currentJob = null;
-
-function sanitizeProfile(name) {
-  let s = String(name || '').trim();
-  // Accept a full profile URL, e.g. https://www.instagram.com/username/ .
-  const m = s.match(/instagram\.com\/([^/?#]+)/i);
-  if (m) s = m[1];
-  return s
+// --- Instagram: save a single post / reel by link --------------------------
+function sanitizeUsername(name) {
+  return String(name || '')
+    .trim()
     .replace(/^@/, '')
-    .replace(/\/+$/, '')
+    .replace(/[^a-zA-Z0-9._]/g, '')
     .toLowerCase();
 }
 
-const RESERVED_SEGMENTS = new Set([
-  'p', 'reel', 'reels', 'explore', 'accounts', 'stories', 'tv', 'direct',
-]);
-
-function isValidProfile(name) {
-  if (RESERVED_SEGMENTS.has(name)) return false;
-  return /^[a-zA-Z0-9._]{1,40}$/.test(name);
-}
-
-function publicJob(job) {
-  if (!job) return null;
-  return {
-    profile: job.profile,
-    status: job.status,
-    found: job.found,
-    downloaded: job.downloaded,
-    log: job.log,
-    error: job.error,
-    startedAt: job.startedAt,
-    finishedAt: job.finishedAt,
-  };
-}
-
-app.post('/api/scrape', (req, res) => {
-  if (currentJob && currentJob.status === 'running') {
-    return res
-      .status(409)
-      .json({ error: 'A backup is already running. Only one runs at a time.' });
-  }
-
-  const profile = sanitizeProfile(req.body.profile);
-  if (!isValidProfile(profile)) {
-    return res.status(400).json({ error: 'Enter a valid Instagram username.' });
-  }
-
-  // Optional login. Credentials stay in this closure only.
-  let creds = null;
-  const login = req.body.login;
+function credsFromBody(login) {
   if (login && login.user && login.password) {
-    creds = {
-      user: sanitizeProfile(login.user),
+    return {
+      user: sanitizeUsername(login.user),
       password: String(login.password),
       code: login.code ? String(login.code).trim() : '',
     };
   }
+  return null;
+}
 
-  const job = {
-    profile,
-    status: 'running',
-    found: 0,
-    downloaded: 0,
-    log: [],
-    error: null,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-  };
-  currentJob = job;
+// Only download media from Instagram's CDN (guards against SSRF via the save
+// endpoint). Localhost is allowed only when explicitly enabled for tests.
+function isAllowedMediaUrl(u) {
+  try {
+    const host = new URL(u).hostname;
+    if (/(^|\.)cdninstagram\.com$/i.test(host) || /(^|\.)fbcdn\.net$/i.test(host)) {
+      return true;
+    }
+    if (process.env.ALLOW_LOCAL_MEDIA === '1' && (host === '127.0.0.1' || host === 'localhost')) {
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
 
-  const log = (msg) => {
-    job.log.push({ t: new Date().toISOString(), msg });
-    if (job.log.length > 200) job.log.shift();
-  };
-
-  const outputDir = path.join(MEDIA_DIR, profile);
-
-  backupProfile({
-    profile,
-    creds,
-    outputDir,
-    sessionDir: SESSION_DIR,
-    onLog: log,
-    onProgress: ({ found, downloaded }) => {
-      if (typeof found === 'number') job.found = found;
-      if (typeof downloaded === 'number') job.downloaded = downloaded;
-    },
-  })
-    .then((result) => {
-      job.found = result.found;
-      job.downloaded = result.downloaded;
-      job.status = 'done';
-      job.finishedAt = new Date().toISOString();
-    })
-    .catch((err) => {
-      job.status = 'error';
-      job.error = err.message || String(err);
-      job.finishedAt = new Date().toISOString();
-      log(`Error: ${job.error}`);
+// Fetch a post's media (for previewing) — does not save anything.
+app.post('/api/ig/fetch', async (req, res) => {
+  const creds = credsFromBody(req.body.login);
+  try {
+    const result = await fetchPostMedia({
+      url: req.body.url,
+      creds,
+      sessionDir: SESSION_DIR,
+      onLog: () => {},
     });
-
-  // Respond immediately; the client polls /api/scrape/status.
-  res.status(202).json(publicJob(job));
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message || String(err) });
+  }
 });
 
-app.get('/api/scrape/status', (req, res) => {
-  res.json(publicJob(currentJob));
+// Save selected media (from a fetched post) to <MEDIA_DIR>/<username>/ .
+app.post('/api/ig/save', async (req, res) => {
+  const username = sanitizeUsername(req.body.username);
+  if (!username) return res.status(400).json({ error: 'Missing username.' });
+
+  const items = Array.isArray(req.body.media) ? req.body.media : [];
+  const valid = items.filter(
+    (m) => m && typeof m.url === 'string' && isAllowedMediaUrl(m.url)
+  );
+  if (!valid.length) {
+    return res.status(400).json({ error: 'No downloadable media provided.' });
+  }
+
+  const dir = path.join(MEDIA_DIR, username);
+  fs.mkdirSync(dir, { recursive: true });
+  const manifestPath = path.join(dir, '.manifest.json');
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (_) {
+    manifest = {};
+  }
+  let nextIndex = 0;
+  for (const assigned of Object.values(manifest)) {
+    const m = String(assigned).match(/_(\d+)\.[^.]+$/);
+    if (m) nextIndex = Math.max(nextIndex, Number(m[1]));
+  }
+
+  const saved = [];
+  let skipped = 0;
+  for (const item of valid) {
+    const key = mediaKey(item.url);
+    if (manifest[key] && fs.existsSync(path.join(dir, manifest[key]))) {
+      skipped++;
+      saved.push({ name: manifest[key], existing: true });
+      continue;
+    }
+    try {
+      const resp = await fetch(item.url, {
+        headers: { 'User-Agent': IG_UA, Referer: 'https://www.instagram.com/' },
+      });
+      if (!resp.ok) continue;
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const ext = extFor(item.url, item.type);
+      const name = `${username}_${nextIndex + 1}.${ext}`;
+      fs.writeFileSync(path.join(dir, name), buf);
+      nextIndex += 1;
+      manifest[key] = name;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      saved.push({ name });
+    } catch (_) {
+      /* skip a file that fails to download */
+    }
+  }
+
+  res.json({ username, saved, skipped });
 });
 
 // List downloaded backups and their media files.
