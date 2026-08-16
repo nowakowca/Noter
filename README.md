@@ -18,7 +18,8 @@ Runs as a single Docker container with a persistent SQLite database.
 ## Instagram (save a post by link)
 
 A second tab lets you save the media (photo, video, or every image in a carousel)
-from a single Instagram **post / reel** you're entitled to save.
+from a single Instagram **post / reel**, a whole **story highlight**, or a single
+**story** you're entitled to save. Highlights and stories require a login.
 
 **How it works:** paste a post link, and a real Chromium browser (via
 [Playwright](https://playwright.dev)) opens it and reads that post's media via

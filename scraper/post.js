@@ -31,6 +31,44 @@ function parseShortcode(input) {
   return null;
 }
 
+// Classify a link: a post/reel, a whole story highlight, or a single story.
+function parseLink(input) {
+  const s = String(input || '').trim();
+  let m;
+  if ((m = s.match(/\/stories\/highlights\/(\d+)/i))) {
+    return { kind: 'highlight', id: m[1] };
+  }
+  if ((m = s.match(/\/stories\/([A-Za-z0-9._]+)\/(\d+)/i))) {
+    return { kind: 'story', username: m[1], id: m[2] };
+  }
+  const shortcode = parseShortcode(s);
+  if (shortcode) return { kind: 'post', shortcode };
+  return null;
+}
+
+// Fetch JSON from inside the authenticated page, returning the HTTP status.
+async function apiFetchInPage(page, url) {
+  return page
+    .evaluate(async (u) => {
+      try {
+        const res = await fetch(u, {
+          headers: { 'X-IG-App-ID': '936619743392459' },
+          credentials: 'include',
+        });
+        let json = null;
+        try {
+          json = await res.json();
+        } catch (_) {
+          /* not JSON */
+        }
+        return { ok: res.ok, status: res.status, json };
+      } catch (e) {
+        return { ok: false, status: 0, json: null };
+      }
+    }, url)
+    .catch(() => ({ ok: false, status: -1, json: null }));
+}
+
 // Instagram shortcodes are base64(mediaId). Convert back to the numeric id so we
 // can hit the precise media-info endpoint.
 function shortcodeToMediaId(shortcode) {
@@ -126,11 +164,12 @@ async function harvestEmbeddedPost(page, shortcode, media, seen) {
 }
 
 async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
-  const shortcode = parseShortcode(url);
-  if (!shortcode) {
-    throw new Error("That doesn't look like an Instagram post, reel or tv link.");
+  const link = parseLink(url);
+  if (!link) {
+    throw new Error(
+      "That doesn't look like an Instagram post, reel, tv or highlight link."
+    );
   }
-  const mediaId = shortcodeToMediaId(shortcode);
 
   const browser = await chromium.launch({
     headless: true,
@@ -153,70 +192,14 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
     let username = null;
     const notes = [];
 
-    onLog(`Opening ${shortcode}…`);
-    await page.goto(`${BASE_URL}/p/${encodeURIComponent(shortcode)}/`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-    await sleep(2500);
-
-    // 1) Precise, no-login: the post's own JSON embedded in the page HTML.
-    const emb = await harvestEmbeddedPost(page, shortcode, media, seen);
-    if (emb.username) username = emb.username;
-    notes.push(
-      emb.matched
-        ? `embedded post data: ${media.length} media`
-        : 'embedded post data: not found'
-    );
-
-    // 2) media-info endpoint (needs a valid login) — fills carousels/video the
-    //    embedded data might lack, and the owner if still unknown.
-    if (mediaId) {
-      const info = await page
-        .evaluate(async (id) => {
-          try {
-            const res = await fetch(`/api/v1/media/${id}/info/`, {
-              headers: { 'X-IG-App-ID': '936619743392459' },
-              credentials: 'include',
-            });
-            if (!res.ok) return { ok: false, status: res.status };
-            return { ok: true, json: await res.json() };
-          } catch (e) {
-            return { ok: false, status: 0 };
-          }
-        }, mediaId)
-        .catch(() => ({ ok: false }));
-
-      if (info.ok && info.json) {
-        const before = media.length;
-        extractMedia(info.json, media, seen);
-        try {
-          username = info.json.items[0].user.username || username;
-        } catch (_) {
-          /* keep existing */
-        }
-        notes.push(`media-info: OK (+${media.length - before} media)`);
-      } else {
-        notes.push(`media-info: HTTP ${info.status || 'error'}`);
-      }
-    }
-
-    // 3) Last resort: Open Graph (only the first, cropped image — flag it).
-    if (!media.length) {
-      const og = await page
-        .evaluate(() => ({
-          image: document.querySelector('meta[property="og:image"]')?.content || null,
-          video: document.querySelector('meta[property="og:video"]')?.content || null,
-          title: document.querySelector('meta[property="og:title"]')?.content || null,
-        }))
-        .catch(() => ({}));
-      if (og.video) media.push({ type: 'video', url: og.video });
-      else if (og.image) media.push({ type: 'image', url: og.image });
-      if (!username && og.title) {
-        const m = og.title.match(/\(@([A-Za-z0-9._]+)\)/) || og.title.match(/^([A-Za-z0-9._]+)/);
-        if (m) username = m[1];
-      }
-      if (media.length) notes.push('fell back to Open Graph (first image only)');
+    if (link.kind === 'post') {
+      await fetchPost(page, link.shortcode, media, seen, notes, (u) => {
+        if (u) username = u;
+      }, onLog);
+    } else if (link.kind === 'highlight') {
+      username = await fetchHighlight(page, link.id, media, seen, notes, onLog);
+    } else if (link.kind === 'story') {
+      username = await fetchStory(page, link, media, seen, notes, onLog);
     }
 
     if (!media.length) {
@@ -224,18 +207,120 @@ async function fetchPostMedia({ url, creds, sessionDir, onLog = () => {} }) {
         .locator('input[name="password"]')
         .count()
         .catch(() => 0);
+      const isAuthKind = link.kind === 'highlight' || link.kind === 'story';
       throw new Error(
-        needLogin
-          ? 'Instagram wants a login to view this post. Add your login and try again.'
-          : 'Could not find media for that link (the post may be private or removed).'
+        needLogin || isAuthKind
+          ? 'Could not read that — highlights and stories require a login. Add your Instagram login and try again.'
+          : 'Could not find media for that link (it may be private or removed).'
       );
     }
 
     onLog(notes.join(' · '));
-    return { username: sanitizeUser(username), shortcode, media, notes };
+    return {
+      username: sanitizeUser(username),
+      ref: link.shortcode || link.id,
+      media,
+      notes,
+    };
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+// A post / reel / tv: embedded page JSON first (no login, full carousel), then
+// the media-info endpoint, then Open Graph as a last resort.
+async function fetchPost(page, shortcode, media, seen, notes, setUser, onLog) {
+  const mediaId = shortcodeToMediaId(shortcode);
+  onLog(`Opening ${shortcode}…`);
+  await page.goto(`${BASE_URL}/p/${encodeURIComponent(shortcode)}/`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+  await sleep(2500);
+
+  const emb = await harvestEmbeddedPost(page, shortcode, media, seen);
+  if (emb.username) setUser(emb.username);
+  notes.push(
+    emb.matched ? `embedded post data: ${media.length} media` : 'embedded post data: not found'
+  );
+
+  if (mediaId) {
+    const info = await apiFetchInPage(page, `/api/v1/media/${mediaId}/info/`);
+    if (info.ok && info.json) {
+      const before = media.length;
+      extractMedia(info.json, media, seen);
+      try {
+        setUser(info.json.items[0].user.username);
+      } catch (_) {
+        /* keep existing */
+      }
+      notes.push(`media-info: OK (+${media.length - before} media)`);
+    } else {
+      notes.push(`media-info: HTTP ${info.status || 'error'}`);
+    }
+  }
+
+  if (!media.length) {
+    const og = await page
+      .evaluate(() => ({
+        image: document.querySelector('meta[property="og:image"]')?.content || null,
+        video: document.querySelector('meta[property="og:video"]')?.content || null,
+        title: document.querySelector('meta[property="og:title"]')?.content || null,
+      }))
+      .catch(() => ({}));
+    if (og.video) media.push({ type: 'video', url: og.video });
+    else if (og.image) media.push({ type: 'image', url: og.image });
+    if (og.title) {
+      const m = og.title.match(/\(@([A-Za-z0-9._]+)\)/) || og.title.match(/^([A-Za-z0-9._]+)/);
+      if (m) setUser(m[1]);
+    }
+    if (media.length) notes.push('fell back to Open Graph (first image only)');
+  }
+}
+
+// A whole story highlight: reels_media returns every story item in the reel.
+async function fetchHighlight(page, highlightId, media, seen, notes, onLog) {
+  onLog(`Opening highlight ${highlightId}…`);
+  await page.goto(`${BASE_URL}/stories/highlights/${encodeURIComponent(highlightId)}/`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+  await sleep(2500);
+
+  const reelId = `highlight:${highlightId}`;
+  const res = await apiFetchInPage(
+    page,
+    `/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(reelId)}`
+  );
+  notes.push(`reels_media: HTTP ${res.status}`);
+  const reel = res.json && res.json.reels ? res.json.reels[reelId] : null;
+  const items = reel && Array.isArray(reel.items) ? reel.items : [];
+  for (const item of items) extractMedia(item, media, seen);
+  notes.push(`highlight: ${media.length} media`);
+  return reel ? usernameOf(reel) || (items[0] && usernameOf(items[0])) : null;
+}
+
+// A single story item: the id in the URL is the media pk.
+async function fetchStory(page, link, media, seen, notes, onLog) {
+  onLog(`Opening story ${link.id}…`);
+  await page.goto(
+    `${BASE_URL}/stories/${encodeURIComponent(link.username)}/${encodeURIComponent(link.id)}/`,
+    { waitUntil: 'domcontentloaded', timeout: 60000 }
+  );
+  await sleep(2500);
+
+  const res = await apiFetchInPage(page, `/api/v1/media/${link.id}/info/`);
+  notes.push(`media-info: HTTP ${res.status}`);
+  let username = link.username;
+  if (res.json) {
+    extractMedia(res.json, media, seen);
+    try {
+      username = res.json.items[0].user.username || username;
+    } catch (_) {
+      /* keep */
+    }
+  }
+  return username;
 }
 
 module.exports = { fetchPostMedia, parseShortcode, shortcodeToMediaId, sanitizeUser };
