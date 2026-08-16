@@ -84,34 +84,54 @@ postForm.addEventListener('submit', async (e) => {
   }
 });
 
+let previewChecks = [];
+
 function renderPreview(data) {
   const notes = data.notes && data.notes.length ? ` — ${data.notes.join(' · ')}` : '';
   previewUser.textContent = `@${data.username} · ${data.media.length} item(s)${notes}`;
   previewGrid.innerHTML = '';
-  for (const m of data.media) {
+  previewChecks = [];
+  data.media.forEach((m, i) => {
     const cell = document.createElement('div');
     cell.className = 'gallery-cell';
-    cell.innerHTML =
+    const inner =
       m.type === 'video'
         ? `<video src="${m.url}" controls preload="metadata"></video>`
         : `<img src="${m.url}" alt="" />`;
+    cell.innerHTML = `<label class="cell-check"><input type="checkbox" data-i="${i}" checked /></label>${inner}`;
     previewGrid.appendChild(cell);
-  }
-  saveBtn.disabled = false;
-  saveBtn.textContent = `Save all (${data.media.length})`;
+    const cb = cell.querySelector('input');
+    cb.addEventListener('change', updateSaveBtn);
+    previewChecks.push(cb);
+  });
   preview.classList.remove('hidden');
+  updateSaveBtn();
+}
+
+function selectedMedia() {
+  return previewChecks
+    .filter((c) => c.checked)
+    .map((c) => current.media[Number(c.dataset.i)]);
+}
+
+function updateSaveBtn() {
+  const n = selectedMedia().length;
+  saveBtn.disabled = n === 0;
+  saveBtn.textContent = n === (current ? current.media.length : 0) ? `Save all (${n})` : `Save ${n}`;
 }
 
 // --- Save the previewed post ----------------------------------------------
 saveBtn.addEventListener('click', async () => {
   if (!current) return;
+  const chosen = selectedMedia();
+  if (!chosen.length) return;
   saveBtn.disabled = true;
   saveBtn.textContent = 'Saving…';
   try {
     const res = await fetch('/api/ig/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: current.username, media: current.media }),
+      body: JSON.stringify({ username: current.username, media: chosen }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Save failed.');
@@ -126,8 +146,7 @@ saveBtn.addEventListener('click', async () => {
     loadBackups();
   } catch (err) {
     setStatus(err.message, 'error');
-    saveBtn.disabled = false;
-    saveBtn.textContent = 'Save all';
+    updateSaveBtn();
   }
 });
 

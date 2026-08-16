@@ -35,6 +35,22 @@ function parseShortcode(input) {
 function parseLink(input) {
   const s = String(input || '').trim();
   let m;
+
+  // Instagram share short-links: /s/<base64>?... . The base64 decodes to
+  // something like "highlight:1786..." (the target of the share).
+  if ((m = s.match(/\/s\/([A-Za-z0-9_-]+)/i))) {
+    let decoded = '';
+    try {
+      decoded = Buffer.from(m[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    } catch (_) {
+      /* not base64 */
+    }
+    const hm = decoded.match(/highlight:(\d+)/i);
+    if (hm) return { kind: 'highlight', id: hm[1] };
+    const scm = decoded.match(/(?:^|\/)(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
+    if (scm) return { kind: 'post', shortcode: scm[1] };
+  }
+
   if ((m = s.match(/\/stories\/highlights\/(\d+)/i))) {
     return { kind: 'highlight', id: m[1] };
   }
